@@ -1,5 +1,6 @@
 import uuid
 from sqlalchemy import text
+from app.infrastructure.db.base import DB_SCHEMA
 
 EXPENSES = [
     'Housing', 'Utilities', 'Internet & Mobile', 'Groceries', 'Eating Out / Delivery', 'Transport',
@@ -15,13 +16,13 @@ INCOMES = [
 def run(db, household_id):
     for name in EXPENSES:
         db.execute(text(
-            "INSERT INTO finance_categories (id, household_id, name, kind, is_default, created_at) "
+            f"INSERT INTO {DB_SCHEMA}.finance_categories (id, household_id, name, kind, is_default, created_at) "
             "VALUES (:id, :household_id, :name, 'expense', true, now())"
         ), {'id': uuid.uuid4(), 'household_id': household_id, 'name': name})
 
     for name in INCOMES:
         db.execute(text(
-            "INSERT INTO finance_categories (id, household_id, name, kind, is_default, created_at) "
+            f"INSERT INTO {DB_SCHEMA}.finance_categories (id, household_id, name, kind, is_default, created_at) "
             "VALUES (:id, :household_id, :name, 'income', true, now())"
         ), {'id': uuid.uuid4(), 'household_id': household_id, 'name': name})
     db.commit()

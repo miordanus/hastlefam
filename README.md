@@ -11,6 +11,35 @@ Telegram-first family operating system for a 2-person household focused on finan
 - JSON schema + Pydantic validation for LLM drafts
 - Event logging, prompt logging, structured logs
 
+## Shared Supabase schema isolation (required)
+This project uses a dedicated PostgreSQL schema: `hastlefam`.
+All app tables are created in `hastlefam` (not `public`).
+
+### 1) First SQL command to run
+Run this once on the target database before the first migration (safe if repeated):
+
+```sql
+CREATE SCHEMA IF NOT EXISTS hastlefam;
+```
+
+### 2) How to use `DATABASE_URL` and `ALEMBIC_DATABASE_URL`
+- `DATABASE_URL`: runtime DB connection used by the FastAPI app, bot, and seed scripts.
+- `ALEMBIC_DATABASE_URL`: migration DB connection used by Alembic.
+- Both should point to the same database in normal local/dev setup.
+- Do **not** set them to a `public`-specific search path; Sprint 0 is hard-wired to use schema `hastlefam`.
+
+### 3) How to verify tables are in `hastlefam` (not `public`)
+After `alembic upgrade head`, run:
+
+```sql
+SELECT table_schema, table_name
+FROM information_schema.tables
+WHERE table_name IN ('households','users','tasks','transactions','event_log')
+ORDER BY table_name, table_schema;
+```
+
+Expected: each listed table appears with `table_schema = 'hastlefam'`.
+
 ## Quick start
 1. `python -m venv .venv && source .venv/bin/activate`
 2. `pip install -e .`
