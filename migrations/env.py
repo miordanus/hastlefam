@@ -1,17 +1,26 @@
+import os
 from logging.config import fileConfig
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool, text
 
-from app.infrastructure.config.settings import get_settings
-from app.infrastructure.db.base import Base, DB_SCHEMA
+from app.infrastructure.db.base import Base
 import app.infrastructure.db.models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-settings = get_settings()
-config.set_main_option('sqlalchemy.url', settings.alembic_database_url)
+
+def _resolve_database_url() -> str:
+    return (
+        os.getenv('ALEMBIC_DATABASE_URL')
+        or os.getenv('DATABASE_URL')
+        or config.get_main_option('sqlalchemy.url')
+    )
+
+
+config.set_main_option('sqlalchemy.url', _resolve_database_url())
 
 target_metadata = Base.metadata
 
