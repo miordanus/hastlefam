@@ -40,6 +40,16 @@ ORDER BY table_name, table_schema;
 
 Expected: each listed table appears with `table_schema = 'hastlefam'`.
 
+### 4) Legacy `public` -> `hastlefam` migration note
+If older deployments created HastleFam tables in `public`, run the latest Alembic head to apply the legacy move migration.
+
+That revision:
+- ensures `hastlefam` exists, and
+- moves only these tables from `public` to `hastlefam` when `public.<table>` exists and `hastlefam.<table>` does not:
+  `households`, `users`, `areas`, `sprints`, `tasks`, `decisions`, `notes`, `meetings`, `transactions`, `finance_categories`, `accounts`, `recurring_payments`, `savings_goals`, `reminders`, `digests`, `llm_drafts`, `event_log`.
+
+It is idempotent (`to_regclass(...)` checks) and does not touch `auth.users`.
+
 ## Quick start
 1. `python -m venv .venv && source .venv/bin/activate`
 2. `pip install -e .`
