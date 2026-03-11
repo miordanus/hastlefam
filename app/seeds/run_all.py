@@ -14,8 +14,19 @@ def main():
                 "INSERT INTO households (id, name, created_at, updated_at) VALUES (:id, 'Default Household', now(), now())"
             ), {'id': household_id})
             db.commit()
-        seed_areas.run(db, household_id)
-        seed_finance_categories.run(db, household_id)
+
+        areas_seeded = db.execute(text(
+            'SELECT 1 FROM areas WHERE household_id = :household_id AND is_default = true LIMIT 1'
+        ), {'household_id': household_id}).scalar() is not None
+        if not areas_seeded:
+            seed_areas.run(db, household_id)
+
+        categories_seeded = db.execute(text(
+            'SELECT 1 FROM finance_categories '
+            'WHERE household_id = :household_id AND is_default = true LIMIT 1'
+        ), {'household_id': household_id}).scalar() is not None
+        if not categories_seeded:
+            seed_finance_categories.run(db, household_id)
     finally:
         db.close()
 
