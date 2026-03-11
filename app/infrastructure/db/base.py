@@ -1,5 +1,8 @@
+from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
+
+DB_SCHEMA = 'hastlefam'
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(schema=DB_SCHEMA)
