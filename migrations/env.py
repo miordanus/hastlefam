@@ -13,11 +13,16 @@ if config.config_file_name is not None:
 
 
 def _resolve_database_url() -> str:
-    return (
+    database_url = (
         os.getenv('ALEMBIC_DATABASE_URL')
         or os.getenv('DATABASE_URL')
         or config.get_main_option('sqlalchemy.url')
     )
+    if not database_url:
+        raise RuntimeError(
+            'Missing database URL for Alembic. Set ALEMBIC_DATABASE_URL, DATABASE_URL, or sqlalchemy.url.'
+        )
+    return database_url
 
 
 config.set_main_option('sqlalchemy.url', _resolve_database_url())
