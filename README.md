@@ -40,15 +40,35 @@ ORDER BY table_name, table_schema;
 
 Expected: each listed table appears with `table_schema = 'hastlefam'`.
 
-### 4) Legacy `public` -> `hastlefam` migration note
-If older deployments created HastleFam tables in `public`, run the latest Alembic head to apply the legacy move migration.
 
-That revision:
-- ensures `hastlefam` exists, and
-- moves only these tables from `public` to `hastlefam` when `public.<table>` exists and `hastlefam.<table>` does not:
-  `households`, `users`, `areas`, `sprints`, `tasks`, `decisions`, `notes`, `meetings`, `transactions`, `finance_categories`, `accounts`, `recurring_payments`, `savings_goals`, `reminders`, `digests`, `llm_drafts`, `event_log`.
+## Deploy (Vercel / Railway)
 
-It is idempotent (`to_regclass(...)` checks) and does not touch `auth.users`.
+### Vercel (API only)
+- This repo includes `vercel.json` and `api/index.py` for serving FastAPI as a Vercel Python function.
+- Set environment variables in Vercel project settings:
+  - `DATABASE_URL`
+  - `ALEMBIC_DATABASE_URL`
+  - `OPENAI_API_KEY`
+  - `OPENAI_MODEL`
+  - `TELEGRAM_BOT_TOKEN` (optional on Vercel if bot is not run there)
+  - `APP_ENV`, `APP_NAME`, `LOG_LEVEL`
+- Deploy from Git and run migrations separately (recommended via Railway job/CLI).
+
+### Railway (API + bot worker)
+- This repo includes:
+  - `railway.json` (web start command + healthcheck)
+  - `Procfile` with two process types:
+    - `web`: FastAPI (`uvicorn app.main:app ...`)
+    - `worker`: Telegram bot (`python -m app.bot.main`)
+- In Railway, create two services from the same repo:
+  1) web service using `web` command
+  2) worker service using `worker` command
+- Configure the same environment variables as above.
+
+### First-run DB commands
+1. `CREATE SCHEMA IF NOT EXISTS hastlefam;`
+2. `alembic upgrade head`
+3. `python -m app.seeds.run_all`
 
 ## Quick start
 1. `python -m venv .venv && source .venv/bin/activate`
