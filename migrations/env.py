@@ -4,7 +4,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool, text
 
-from app.infrastructure.db.base import Base
+from app.infrastructure.db.base import Base, DB_SCHEMA
 import app.infrastructure.db.models  # noqa: F401
 
 config = context.config
@@ -37,6 +37,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         include_schemas=True,
+        version_table='hf_alembic_version',
         version_table_schema=DB_SCHEMA,
     )
     with context.begin_transaction():
@@ -57,6 +58,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             include_schemas=True,
+            version_table='hf_alembic_version',
             version_table_schema=DB_SCHEMA,
         )
         with context.begin_transaction():

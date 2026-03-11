@@ -40,6 +40,14 @@ ORDER BY table_name, table_schema;
 
 Expected: each listed table appears with `table_schema = 'hastlefam'`.
 
+Also validate Alembic version tracking with:
+
+```sql
+SELECT version_num FROM hastlefam.hf_alembic_version;
+```
+
+Going forward, use `hastlefam.hf_alembic_version` for migration validation instead of `public.alembic_version`.
+
 ## Quick start
 1. `python -m venv .venv && source .venv/bin/activate`
 2. `pip install -e .`
