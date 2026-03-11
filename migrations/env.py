@@ -2,9 +2,11 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import engine_from_config, pool, text
 
-from app.infrastructure.db.base import Base
+from app.infrastructure.db.base import Base, DB_SCHEMA
 import app.infrastructure.db.models  # noqa: F401
 
 config = context.config
@@ -12,9 +14,19 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 
+class _AlembicSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file='.env', extra='ignore')
+
+    alembic_database_url: str | None = Field(alias='ALEMBIC_DATABASE_URL', default=None)
+    database_url: str | None = Field(alias='DATABASE_URL', default=None)
+
+
 def _resolve_database_url() -> str:
+    settings = _AlembicSettings()
     return (
-        os.getenv('ALEMBIC_DATABASE_URL')
+        settings.alembic_database_url
+        or settings.database_url
+        or os.getenv('ALEMBIC_DATABASE_URL')
         or os.getenv('DATABASE_URL')
         or config.get_main_option('sqlalchemy.url')
     )
