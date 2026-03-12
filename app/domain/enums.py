@@ -32,6 +32,8 @@ class Currency(StrEnum):
     RUB = 'RUB'
     USD = 'USD'
     USDT = 'USDT'
+    EUR = 'EUR'
+    AMD = 'AMD'
 
 
 class CategoryKind(StrEnum):

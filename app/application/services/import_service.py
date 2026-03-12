@@ -28,6 +28,14 @@ class ImportService:
         force_expense_source: bool = True,
     ) -> dict[str, Any]:
         import_batch_id = f"{source_name}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+
+        normalized = sql_query.strip().rstrip(";").strip()
+        if not normalized.upper().startswith("SELECT"):
+            raise ValueError("Only SELECT queries are allowed for import")
+        for keyword in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "GRANT", "REVOKE"):
+            if keyword in normalized.upper().split("SELECT", 1)[0]:
+                raise ValueError(f"Forbidden SQL keyword detected: {keyword}")
+
         rows = self.db.execute(text(sql_query)).mappings().all()
 
         created = 0

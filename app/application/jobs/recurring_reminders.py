@@ -11,6 +11,9 @@ from app.application.services.finance_service import FinanceService
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.db.models import EventLog, User
 from app.infrastructure.db.session import SessionLocal
+from app.infrastructure.logging.logger import get_logger
+
+logger = get_logger('recurring_reminders')
 
 
 async def _send(bot: Bot, chat_id: int, text: str) -> None:
@@ -38,7 +41,8 @@ def run_recurring_reminders(days: int = 3) -> dict:
                     for user in users:
                         try:
                             asyncio.run(_send(bot, int(user.telegram_id), text))
-                        except Exception:
+                        except Exception as exc:
+                            logger.warning('reminder.send_failed', user_id=str(user.id), error=str(exc))
                             continue
                     db.add(
                         EventLog(
