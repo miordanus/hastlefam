@@ -1,14 +1,22 @@
 import uuid
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
-from sqlalchemy import String, DateTime, Date, Boolean, ForeignKey, Text, Numeric, Enum, JSON, Index
+
+from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from app.infrastructure.db.base import Base
+
 from app.domain.enums import (
-    TaskType, TaskStatus, NoteType, MeetingType, Currency, CategoryKind,
-    TransactionDirection, DraftType,
+    CategoryKind,
+    Currency,
+    DraftType,
+    MeetingType,
+    NoteType,
+    TaskStatus,
+    TaskType,
+    TransactionDirection,
 )
+from app.infrastructure.db.base import Base
 
 
 def now_utc() -> datetime:
@@ -16,7 +24,7 @@ def now_utc() -> datetime:
 
 
 class Household(Base):
-    __tablename__ = 'households'
+    __tablename__ = "households"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -24,9 +32,9 @@ class Household(Base):
 
 
 class User(Base):
-    __tablename__ = 'users'
+    __tablename__ = "users"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     telegram_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -34,10 +42,21 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
-class Area(Base):
-    __tablename__ = 'areas'
+class Owner(Base):
+    __tablename__ = "owners"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class Area(Base):
+    __tablename__ = "areas"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -45,39 +64,39 @@ class Area(Base):
 
 
 class Sprint(Base):
-    __tablename__ = 'sprints'
+    __tablename__ = "sprints"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default='planned')
+    status: Mapped[str] = mapped_column(String(32), default="planned")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
 class Task(Base):
-    __tablename__ = 'tasks'
+    __tablename__ = "tasks"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False, index=True)
-    area_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('areas.id'))
-    sprint_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('sprints.id'))
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False, index=True)
+    area_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("areas.id"))
+    sprint_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sprints.id"))
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    task_type: Mapped[TaskType] = mapped_column(Enum(TaskType, name='task_type_enum'), default=TaskType.TASK)
-    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name='task_status_enum'), default=TaskStatus.BACKLOG)
-    priority: Mapped[str] = mapped_column(String(16), default='medium')
+    task_type: Mapped[TaskType] = mapped_column(Enum(TaskType, name="task_type_enum"), default=TaskType.TASK)
+    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status_enum"), default=TaskStatus.BACKLOG)
+    priority: Mapped[str] = mapped_column(String(16), default="medium")
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
 class Decision(Base):
-    __tablename__ = 'decisions'
+    __tablename__ = "decisions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    meeting_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('meetings.id'))
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    meeting_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meetings.id"))
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -85,142 +104,176 @@ class Decision(Base):
 
 
 class Note(Base):
-    __tablename__ = 'notes'
+    __tablename__ = "notes"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    author_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('users.id'), nullable=False)
-    area_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('areas.id'))
-    meeting_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('meetings.id'))
-    note_type: Mapped[NoteType] = mapped_column(Enum(NoteType, name='note_type_enum'), default=NoteType.NOTE)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    author_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    area_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("areas.id"))
+    meeting_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meetings.id"))
+    note_type: Mapped[NoteType] = mapped_column(Enum(NoteType, name="note_type_enum"), default=NoteType.NOTE)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class Meeting(Base):
-    __tablename__ = 'meetings'
+    __tablename__ = "meetings"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    meeting_type: Mapped[MeetingType] = mapped_column(Enum(MeetingType, name='meeting_type_enum'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    meeting_type: Mapped[MeetingType] = mapped_column(Enum(MeetingType, name="meeting_type_enum"), nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    status: Mapped[str] = mapped_column(String(32), default='scheduled')
+    status: Mapped[str] = mapped_column(String(32), default="scheduled")
     agenda_text: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class FinanceCategory(Base):
-    __tablename__ = 'finance_categories'
+    __tablename__ = "finance_categories"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('households.id'))
+    household_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("households.id"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[CategoryKind] = mapped_column(Enum(CategoryKind, name='category_kind_enum'), nullable=False)
+    kind: Mapped[CategoryKind] = mapped_column(Enum(CategoryKind, name="category_kind_enum"), nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class Account(Base):
-    __tablename__ = 'accounts'
+    __tablename__ = "accounts"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("owners.id"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name='currency_enum'), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
     is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class RawImportTransaction(Base):
+    __tablename__ = "raw_import_transactions"
+    __table_args__ = (
+        Index("ix_raw_import_status_imported_at", "normalization_status", "imported_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False, index=True)
+    import_batch_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    raw_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    raw_occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    raw_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    raw_currency: Mapped[str | None] = mapped_column(String(8))
+    raw_merchant: Mapped[str | None] = mapped_column(String(255))
+    raw_description: Mapped[str | None] = mapped_column(Text)
+    normalization_status: Mapped[str] = mapped_column(String(32), default="pending")
+    normalization_error: Mapped[str | None] = mapped_column(Text)
 
 
 class Transaction(Base):
-    __tablename__ = 'transactions'
-    __table_args__ = (Index('ix_transactions_household_occurred_at', 'household_id', 'occurred_at'),)
+    __tablename__ = "transactions"
+    __table_args__ = (Index("ix_transactions_household_occurred_at", "household_id", "occurred_at"),)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('accounts.id'), nullable=False)
-    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('finance_categories.id'), nullable=False)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
-    direction: Mapped[TransactionDirection] = mapped_column(Enum(TransactionDirection, name='transaction_direction_enum'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("owners.id"), index=True)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id"))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("finance_categories.id"))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    direction: Mapped[TransactionDirection] = mapped_column(Enum(TransactionDirection, name="transaction_direction_enum"), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name='currency_enum'), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    merchant_raw: Mapped[str | None] = mapped_column(String(255))
+    description_raw: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(64), default="manual")
+    raw_import_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("raw_import_transactions.id"))
+    parse_status: Mapped[str | None] = mapped_column(String(32))
+    parse_confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    dedup_fingerprint: Mapped[str | None] = mapped_column(String(128), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
 class RecurringPayment(Base):
-    __tablename__ = 'recurring_payments'
+    __tablename__ = "recurring_payments"
+    __table_args__ = (Index("ix_recurring_due_active", "next_due_date", "is_active"),)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('accounts.id'), nullable=False)
-    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('finance_categories.id'), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name='currency_enum'), nullable=False)
-    period: Mapped[str] = mapped_column(String(16), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("owners.id"), index=True)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id"))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("finance_categories.id"))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    amount_expected: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
+    cadence: Mapped[str] = mapped_column(String(16), nullable=False, default="monthly")
+    day_of_month: Mapped[int | None] = mapped_column()
     next_due_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class SavingsGoal(Base):
-    __tablename__ = 'savings_goals'
+    __tablename__ = "savings_goals"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     target_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name='currency_enum'), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
     deadline: Mapped[date | None] = mapped_column(Date)
     current_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
-    status: Mapped[str] = mapped_column(String(32), default='active')
+    status: Mapped[str] = mapped_column(String(32), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class Reminder(Base):
-    __tablename__ = 'reminders'
+    __tablename__ = "reminders"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('users.id'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default='pending')
-    channel: Mapped[str] = mapped_column(String(32), default='telegram')
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    channel: Mapped[str] = mapped_column(String(32), default="telegram")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class Digest(Base):
-    __tablename__ = 'digests'
+    __tablename__ = "digests"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     digest_type: Mapped[str] = mapped_column(String(32), nullable=False)
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     content_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    status: Mapped[str] = mapped_column(String(32), default='draft')
+    status: Mapped[str] = mapped_column(String(32), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class LLMDraft(Base):
-    __tablename__ = 'llm_drafts'
+    __tablename__ = "llm_drafts"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('households.id'), nullable=False)
-    draft_type: Mapped[DraftType] = mapped_column(Enum(DraftType, name='draft_type_enum'), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    draft_type: Mapped[DraftType] = mapped_column(Enum(DraftType, name="draft_type_enum"), nullable=False)
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
     input_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     output_json: Mapped[dict | None] = mapped_column(JSON)
-    validation_status: Mapped[str] = mapped_column(String(32), default='pending')
+    validation_status: Mapped[str] = mapped_column(String(32), default="pending")
     error_text: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class EventLog(Base):
-    __tablename__ = 'event_log'
-    __table_args__ = (Index('ix_event_log_created_event', 'created_at', 'event_type'),)
+    __tablename__ = "event_log"
+    __table_args__ = (Index("ix_event_log_created_event", "created_at", "event_type"),)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('households.id'))
-    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    household_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("households.id"))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     entity_type: Mapped[str | None] = mapped_column(String(64))
     entity_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    severity: Mapped[str] = mapped_column(String(16), default='info')
+    severity: Mapped[str] = mapped_column(String(16), default="info")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

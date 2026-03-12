@@ -1,15 +1,13 @@
 <!doctype html>
 <html>
-  <head><title>HastleFam Dashboard</title></head>
+  <head><title>HastleFam Money MVP</title></head>
   <body>
-    <h1>HastleFam Dashboard</h1>
+    <h1>HastleFam Money MVP</h1>
     <ul>
-      <li>Current sprint summary (placeholder)</li>
-      <li>Task by owner/status/priority (placeholder)</li>
-      <li>Carry-over and overdue (placeholder)</li>
-      <li>Monthly finance snapshot (placeholder)</li>
-      <li>Upcoming recurring payments (placeholder)</li>
-      <li>Adoption/logging health (placeholder)</li>
+      <li><code>POST /finance/import/sql</code> - SQL import into raw + normalized transactions</li>
+      <li><code>GET /finance/month?household_id=&lt;id&gt;</code> - MTD summary</li>
+      <li><code>GET /finance/upcoming?household_id=&lt;id&gt;&days=7</code> - upcoming recurring</li>
+      <li><a href="/finance/corrections?household_id=REPLACE_WITH_ID">Correction screen</a></li>
     </ul>
   </body>
 </html>

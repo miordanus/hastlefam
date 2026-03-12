@@ -7,4 +7,4 @@ router = Router()
 
 @router.message(CommandStart())
 async def start(message: Message):
-    await message.answer('HastleFam bot is online. Use /capture to add an item.')
+    await message.answer('Money bot is online. Just send: "149 biedronka"')
