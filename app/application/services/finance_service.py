@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -20,13 +21,17 @@ class FinanceService:
         today = for_date or datetime.now(timezone.utc).date()
         month_start = today.replace(day=1)
         month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+        month_start_dt = datetime(month_start.year, month_start.month, month_start.day, tzinfo=timezone.utc)
+        today_end_dt = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
 
         rows = (
             self.db.query(Transaction)
             .filter(
-                Transaction.household_id == household_id,
-                func.date(Transaction.occurred_at) >= month_start,
-                func.date(Transaction.occurred_at) <= today,
+                Transaction.household_id == hid,
+                Transaction.occurred_at >= month_start_dt,
+                Transaction.occurred_at <= today_end_dt,
             )
             .all()
         )
@@ -35,6 +40,12 @@ class FinanceService:
         total_income = Decimal("0")
         biggest_expenses: list[dict[str, Any]] = []
         by_category: dict[str, Decimal] = {}
+
+        category_ids = {tx.category_id for tx in rows if tx.category_id}
+        categories_map: dict[str, str] = {}
+        if category_ids:
+            cats = self.db.query(FinanceCategory).filter(FinanceCategory.id.in_(category_ids)).all()
+            categories_map = {str(c.id): c.name for c in cats}
 
         for tx in rows:
             amount = Decimal(str(tx.amount))
@@ -47,11 +58,7 @@ class FinanceService:
                         "occurred_at": tx.occurred_at.date().isoformat(),
                     }
                 )
-                category_name = "Uncategorized"
-                if tx.category_id:
-                    category = self.db.get(FinanceCategory, tx.category_id)
-                    if category:
-                        category_name = category.name
+                category_name = categories_map.get(str(tx.category_id), "Uncategorized") if tx.category_id else "Uncategorized"
                 by_category[category_name] = by_category.get(category_name, Decimal("0")) + amount
             elif tx.direction == TransactionDirection.INCOME:
                 total_income += amount
@@ -72,11 +79,12 @@ class FinanceService:
     def upcoming_payments(self, household_id: str, days: int = 7, until_date: date | None = None) -> list[dict[str, Any]]:
         today = datetime.now(timezone.utc).date()
         last_day = until_date or (today + timedelta(days=days))
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
 
         rec_rows = (
             self.db.query(RecurringPayment)
             .filter(
-                RecurringPayment.household_id == household_id,
+                RecurringPayment.household_id == hid,
                 RecurringPayment.is_active.is_(True),
                 RecurringPayment.next_due_date >= today,
                 RecurringPayment.next_due_date <= last_day,
