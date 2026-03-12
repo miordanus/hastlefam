@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Finance Corrections</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; }
+      th { background-color: #f2f2f2; }
+      form.inline { display: inline; }
+    </style>
+  </head>
+  <body>
+    <h2>Transactions correction</h2>
+    <p>
+      <a href="/finance/corrections?household_id={{ household_id }}&uncategorized=false">All</a> |
+      <a href="/finance/corrections?household_id={{ household_id }}&uncategorized=true">Uncategorized only</a>
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Amount</th>
+          <th>Merchant</th>
+          <th>Category</th>
+          <th>Account</th>
+          <th>Owner</th>
+          <th>Source</th>
+          <th>Recurring</th>
+          <th>Save</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tx in transactions %}
+        <tr>
+          <form method="post" action="/finance/corrections/{{ tx.id }}" class="inline">
+            <td>{{ tx.occurred_at.date() }}</td>
+            <td>{{ tx.amount }} {{ tx.currency.value }}</td>
+            <td>{{ tx.merchant_raw or tx.description_raw or '-' }}</td>
+            <td>
+              <select name="category_id">
+                <option value="">--</option>
+                {% for c in categories %}
+                <option value="{{ c.id }}" {% if tx.category_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>{{ tx.account_id or '-' }}</td>
+            <td>{{ tx.owner_id or '-' }}</td>
+            <td>{{ tx.source }}</td>
+            <td>
+              <select name="recurring_payment_id">
+                <option value="">--</option>
+                {% for r in recurring %}
+                <option value="{{ r.id }}">{{ r.title }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <input type="hidden" name="household_id" value="{{ household_id }}"/>
+              <input type="hidden" name="uncategorized" value="{{ uncategorized }}"/>
+              <button type="submit">Save</button>
+            </td>
+          </form>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>

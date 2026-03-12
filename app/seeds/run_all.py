@@ -2,7 +2,7 @@ import uuid
 from sqlalchemy import text
 from app.infrastructure.db.session import SessionLocal
 from app.infrastructure.db.base import DB_SCHEMA
-from app.seeds import seed_areas, seed_finance_categories
+from app.seeds import seed_areas, seed_finance_categories, seed_owners
 
 
 def main():
@@ -17,6 +17,7 @@ def main():
             db.commit()
         seed_areas.run(db, household_id)
         seed_finance_categories.run(db, household_id)
+        seed_owners.run(db, household_id)
     finally:
         db.close()
 
