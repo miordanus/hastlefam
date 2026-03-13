@@ -1,4 +1,9 @@
-# HastleFam — Final Master Prompt for Claude
+# HastleFam Product Contract
+
+This file is the **source of truth** for product behavior.
+
+If code or older documentation conflicts with this file,
+follow this document. Keep in mind that there are unused archive features in the repo - you can keep them.
 
 ## Role
 
