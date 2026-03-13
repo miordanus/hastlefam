@@ -1,5 +1,9 @@
 # HastleFam Money MVP
 
+Product behavior is defined in:
+
+docs/hastlefam_product_contract.md
+
 Telegram-first money copilot for two (mine / wife / shared), optimized for quick daily capture and monthly money review.
 
 ## In scope (active MVP)
