@@ -23,6 +23,11 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _enum_values(enum_cls):
+    """Return enum values (not names) so SQLAlchemy sends lowercase to PG."""
+    return [e.value for e in enum_cls]
+
+
 class Household(Base):
     __tablename__ = "households"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -84,8 +89,8 @@ class Task(Base):
     owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    task_type: Mapped[TaskType] = mapped_column(Enum(TaskType, name="task_type_enum"), default=TaskType.TASK)
-    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status_enum"), default=TaskStatus.BACKLOG)
+    task_type: Mapped[TaskType] = mapped_column(Enum(TaskType, name="task_type_enum", values_callable=_enum_values), default=TaskType.TASK)
+    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status_enum", values_callable=_enum_values), default=TaskStatus.BACKLOG)
     priority: Mapped[str] = mapped_column(String(16), default="medium")
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -110,7 +115,7 @@ class Note(Base):
     author_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     area_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("areas.id"))
     meeting_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meetings.id"))
-    note_type: Mapped[NoteType] = mapped_column(Enum(NoteType, name="note_type_enum"), default=NoteType.NOTE)
+    note_type: Mapped[NoteType] = mapped_column(Enum(NoteType, name="note_type_enum", values_callable=_enum_values), default=NoteType.NOTE)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
@@ -119,7 +124,7 @@ class Meeting(Base):
     __tablename__ = "meetings"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
-    meeting_type: Mapped[MeetingType] = mapped_column(Enum(MeetingType, name="meeting_type_enum"), nullable=False)
+    meeting_type: Mapped[MeetingType] = mapped_column(Enum(MeetingType, name="meeting_type_enum", values_callable=_enum_values), nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -133,7 +138,7 @@ class FinanceCategory(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     household_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("households.id"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[CategoryKind] = mapped_column(Enum(CategoryKind, name="category_kind_enum"), nullable=False)
+    kind: Mapped[CategoryKind] = mapped_column(Enum(CategoryKind, name="category_kind_enum", values_callable=_enum_values), nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
@@ -145,7 +150,7 @@ class Account(Base):
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("owners.id"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum", values_callable=_enum_values), nullable=False)
     is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -180,9 +185,9 @@ class Transaction(Base):
     account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id"))
     category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("finance_categories.id"))
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
-    direction: Mapped[TransactionDirection] = mapped_column(Enum(TransactionDirection, name="transaction_direction_enum"), nullable=False)
+    direction: Mapped[TransactionDirection] = mapped_column(Enum(TransactionDirection, name="transaction_direction_enum", values_callable=_enum_values), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum", values_callable=_enum_values), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     merchant_raw: Mapped[str | None] = mapped_column(String(255))
     description_raw: Mapped[str | None] = mapped_column(Text)
@@ -206,7 +211,7 @@ class RecurringPayment(Base):
     category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("finance_categories.id"))
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     amount_expected: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum", values_callable=_enum_values), nullable=False)
     cadence: Mapped[str] = mapped_column(String(16), nullable=False, default="monthly")
     day_of_month: Mapped[int | None] = mapped_column()
     next_due_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -220,7 +225,7 @@ class SavingsGoal(Base):
     household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     target_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum"), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum", values_callable=_enum_values), nullable=False)
     deadline: Mapped[date | None] = mapped_column(Date)
     current_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     status: Mapped[str] = mapped_column(String(32), default="active")
@@ -256,7 +261,7 @@ class LLMDraft(Base):
     __tablename__ = "llm_drafts"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
-    draft_type: Mapped[DraftType] = mapped_column(Enum(DraftType, name="draft_type_enum"), nullable=False)
+    draft_type: Mapped[DraftType] = mapped_column(Enum(DraftType, name="draft_type_enum", values_callable=_enum_values), nullable=False)
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
     input_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     output_json: Mapped[dict | None] = mapped_column(JSON)
