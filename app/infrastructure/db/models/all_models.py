@@ -197,6 +197,8 @@ class Transaction(Base):
     parse_status: Mapped[str | None] = mapped_column(String(32))
     parse_confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
     dedup_fingerprint: Mapped[str | None] = mapped_column(String(128), index=True)
+    primary_tag: Mapped[str | None] = mapped_column(String(64), index=True)
+    extra_tags: Mapped[list | None] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
