@@ -52,11 +52,10 @@ def build_post_capture_keyboard(
 
     if tag_missing:
         buttons.append(InlineKeyboardButton(text="🏷 Категория", callback_data=f"{_CB_TAG}{tx_id}"))
-    if not date_explicit:
-        buttons.append(InlineKeyboardButton(text="📅 Дата", callback_data=f"{_CB_DATE}{tx_id}"))
+    # Always show date button — changing date is the most common correction
+    buttons.append(InlineKeyboardButton(text="📅 Дата", callback_data=f"{_CB_DATE}{tx_id}"))
     if not currency_explicit:
-        buttons.append(InlineKeyboardButton(text="💱 Валюта / курс", callback_data=f"{_CB_CURRENCY}{tx_id}"))
-    buttons.append(InlineKeyboardButton(text="🗓 Запланировать", callback_data=f"{_CB_PLAN}{tx_id}"))
+        buttons.append(InlineKeyboardButton(text="💱 Валюта", callback_data=f"{_CB_CURRENCY}{tx_id}"))
     buttons.append(InlineKeyboardButton(text="✅ Готово", callback_data=f"{_CB_DONE}{tx_id}"))
 
     # Layout: up to 2 buttons per row, Done always last on its own row

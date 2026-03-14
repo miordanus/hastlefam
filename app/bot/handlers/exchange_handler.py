@@ -87,7 +87,7 @@ async def on_exchange_confirm(callback: CallbackQuery) -> None:
     await callback.answer()
     parts = callback.data.split(":")
     # exc:save:{from_amount}:{from_cur}:{to_amount}:{to_cur}:{rate}
-    if len(parts) < 8:
+    if len(parts) < 7:
         await callback.message.edit_text("⚠️ Сейчас не получилось обработать запрос.\nПопробуй ещё раз чуть позже.", reply_markup=None)
         return
 

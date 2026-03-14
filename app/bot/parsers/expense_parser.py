@@ -55,6 +55,9 @@ _DATE_HINTS: dict[str, int] = {
 # ISO date pattern: YYYY-MM-DD
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
+# Short date patterns: DD-MM, DD.MM, D-M, D.M (day-month, current year assumed)
+_SHORT_DATE_RE = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})\b")
+
 # Amount: leading number (with comma or dot decimal)
 _AMOUNT_RE = re.compile(r"^[+]?(\d+(?:[\.,]\d{1,2})?)")
 
@@ -212,12 +215,24 @@ def _extract_date(text: str, today: date) -> tuple[date, bool, str]:
             cleaned = re.sub(re.escape(hint), "", text, flags=re.IGNORECASE).strip()
             return result_date, True, cleaned
 
-    # Check ISO date
+    # Check ISO date (YYYY-MM-DD)
     m = _ISO_DATE_RE.search(text)
     if m:
         try:
             result_date = date.fromisoformat(m.group(1))
             cleaned = _ISO_DATE_RE.sub("", text).strip()
+            return result_date, True, cleaned
+        except ValueError:
+            pass
+
+    # Check short date (DD-MM, DD.MM, D-M, D.M — day first, current year)
+    m = _SHORT_DATE_RE.search(text)
+    if m:
+        try:
+            day = int(m.group(1))
+            month = int(m.group(2))
+            result_date = date(today.year, month, day)
+            cleaned = _SHORT_DATE_RE.sub("", text, count=1).strip()
             return result_date, True, cleaned
         except ValueError:
             pass
