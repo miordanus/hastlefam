@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from app.bot.handlers.cancel import router as cancel_router
 from app.bot.handlers.start import router as start_router
 from app.bot.handlers.help import router as help_router
 from app.bot.handlers.month import router as month_router
@@ -84,7 +85,9 @@ async def main() -> None:
 
     dp.message.middleware(LoggingMiddleware())
 
-    # Routers: most-specific first, catch-all capture last
+    # Routers: cancel first (must intercept /cancel in any state),
+    # then most-specific, catch-all capture last
+    dp.include_router(cancel_router)
     dp.include_router(start_router)
     dp.include_router(help_router)
     dp.include_router(month_router)

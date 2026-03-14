@@ -177,7 +177,7 @@ async def on_inbox_custom(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(InboxStates.waiting_custom_tag)
     await state.update_data(tx_id=tx_id)
     await callback.message.edit_text(
-        "Введи тег одним словом (например: кафе, транспорт, продукты):",
+        "Введи тег одним словом (например: кафе, транспорт, продукты):\n\n/cancel — отменить",
         reply_markup=None,
     )
 

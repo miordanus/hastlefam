@@ -149,9 +149,9 @@ async def on_update_balance(callback: CallbackQuery, state: FSMContext) -> None:
         acc_currency = acc.currency.value
 
     await state.set_state(BalancesStates.waiting_balance_amount)
-    await state.update_data(account_id=account_id)
+    await state.update_data(account_id=account_id, account_name=acc_name)
     await callback.message.edit_text(
-        f"Введи текущий баланс ({acc_name}, {acc_currency}):",
+        f"Введи текущий баланс ({acc_name}, {acc_currency}):\n\n/cancel — отменить",
         reply_markup=None,
     )
 
@@ -159,14 +159,20 @@ async def on_update_balance(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(StateFilter(BalancesStates.waiting_balance_amount))
 async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip().replace(",", ".")
-    try:
-        amount = Decimal(text)
-    except InvalidOperation:
-        await message.answer("⚠️ Не понял сумму. Введи число, например: 12000 или 450.50")
-        return
 
     data = await state.get_data()
     account_id = data.get("account_id", "")
+    acc_name = data.get("account_name", "счёт")
+
+    try:
+        amount = Decimal(text)
+    except InvalidOperation:
+        await message.answer(
+            f"⚠️ Сейчас жду баланс для {acc_name}.\n"
+            f"Введи число (например: 12000 или 450.50)\n\n"
+            f"/cancel — отменить и вернуться к записи трат"
+        )
+        return
     user_id = None
 
     with SessionLocal() as db:
@@ -224,7 +230,7 @@ async def on_add_account(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(BalancesStates.waiting_account_name)
     await callback.message.edit_text(
-        "Как называется счёт? (например: Наличные, Тинькофф, USDT)",
+        "Как называется счёт? (например: Наличные, Тинькофф, USDT)\n\n/cancel — отменить",
         reply_markup=None,
     )
 
@@ -287,8 +293,8 @@ async def on_account_currency_choice(callback: CallbackQuery, state: FSMContext)
         account_id = str(acc.id)
 
     await state.set_state(BalancesStates.waiting_balance_amount)
-    await state.update_data(account_id=account_id)
+    await state.update_data(account_id=account_id, account_name=account_name)
     await callback.message.edit_text(
-        f"Счёт создан: {account_name} · {currency_str}\n\nВведи текущий баланс:",
+        f"Счёт создан: {account_name} · {currency_str}\n\nВведи текущий баланс:\n\n/cancel — отменить",
         reply_markup=None,
     )

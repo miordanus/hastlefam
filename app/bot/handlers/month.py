@@ -88,7 +88,18 @@ async def month_command(message: Message):
     # Top actual tags only — untagged items are NOT shown here
     tags = summary["top_tags"]
     if tags:
-        tags_block = "\n".join(f"• #{x['tag']}: {x['amount']}" for x in tags[:5])
+        tag_lines = []
+        for x in tags[:5]:
+            by_cur = x.get("by_currency")
+            if by_cur and len(by_cur) == 1:
+                cur, amt = next(iter(by_cur.items()))
+                tag_lines.append(f"• #{x['tag']}: {amt} {cur}")
+            elif by_cur:
+                parts = ", ".join(f"{amt} {cur}" for cur, amt in by_cur.items())
+                tag_lines.append(f"• #{x['tag']}: {parts}")
+            else:
+                tag_lines.append(f"• #{x['tag']}: {x['amount']}")
+        tags_block = "\n".join(tag_lines)
     else:
         tags_block = "• Тегов пока нет."
 
