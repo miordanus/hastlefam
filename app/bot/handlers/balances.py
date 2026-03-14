@@ -123,9 +123,9 @@ async def send_balances(message: Message, telegram_id: str) -> None:
             return
 
         snapshots = {acc.id: _latest_snapshot(db, acc.id) for acc in accounts}
+        text = "💼 Счета\n\n" + _format_accounts(accounts, snapshots)
+        keyboard = _build_accounts_keyboard(accounts)
 
-    text = "💼 Счета\n\n" + _format_accounts(accounts, snapshots)
-    keyboard = _build_accounts_keyboard(accounts)
     await message.answer(text, reply_markup=keyboard)
 
 
