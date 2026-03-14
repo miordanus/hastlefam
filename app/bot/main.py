@@ -106,9 +106,17 @@ async def main() -> None:
     except Exception as e:
         log.error("daily digest scheduler failed to start: %s", e, exc_info=True)
 
+    log.info(
+        "starting polling — registered routers: %d",
+        len(dp.routers),
+    )
+
     renew_task = asyncio.create_task(_renew_lock(lock)) if lock else None
     try:
         await dp.start_polling(bot)
+    except Exception as exc:
+        log.error("bot polling failed: %s", exc, exc_info=True)
+        raise
     finally:
         if renew_task:
             renew_task.cancel()

@@ -16,7 +16,10 @@ def get_engine():
     )
 
 
+@lru_cache
+def get_session_factory():
+    return sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+
+
 def SessionLocal() -> Session:
-    engine = get_engine()
-    factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    return factory()
+    return get_session_factory()()
