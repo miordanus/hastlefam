@@ -199,6 +199,12 @@ class Transaction(Base):
     dedup_fingerprint: Mapped[str | None] = mapped_column(String(128), index=True)
     primary_tag: Mapped[str | None] = mapped_column(String(64), index=True)
     extra_tags: Mapped[list | None] = mapped_column(JSON, default=list)
+    # Exchange-specific fields (direction=EXCHANGE only)
+    from_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    from_currency: Mapped[str | None] = mapped_column(String(10))
+    to_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    to_currency: Mapped[str | None] = mapped_column(String(10))
+    exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
@@ -270,6 +276,23 @@ class LLMDraft(Base):
     validation_status: Mapped[str] = mapped_column(String(32), default="pending")
     error_text: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PlannedPayment(Base):
+    __tablename__ = "planned_payments"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False, index=True)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("owners.id"))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency_enum", values_callable=_enum_values), nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    primary_tag: Mapped[str | None] = mapped_column(String(64))
+    extra_tags: Mapped[list | None] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="planned")
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    linked_transaction_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("transactions.id"))
 
 
 class EventLog(Base):
