@@ -53,9 +53,9 @@ class FinanceService:
 
             if tx.direction == TransactionDirection.EXPENSE:
                 spend_by_currency[cur] = spend_by_currency.get(cur, Decimal("0")) + amount
-                tag = tx.primary_tag or "без категории"
-                by_tag[tag] = by_tag.get(tag, Decimal("0")) + amount
-                if not tx.primary_tag:
+                if tx.primary_tag:
+                    by_tag[tx.primary_tag] = by_tag.get(tx.primary_tag, Decimal("0")) + amount
+                else:
                     untagged_count += 1
             elif tx.direction == TransactionDirection.INCOME:
                 income_by_currency[cur] = income_by_currency.get(cur, Decimal("0")) + amount

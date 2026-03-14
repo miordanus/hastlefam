@@ -295,6 +295,24 @@ class PlannedPayment(Base):
     linked_transaction_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("transactions.id"))
 
 
+class BalanceSnapshot(Base):
+    """Manual balance checkpoint for an account.
+
+    Stores what the user reports as the current actual balance.
+    There is no automatic expected-balance computation — account transaction
+    attribution is too sparse for that to be reliable at this stage.
+    Delta is computed between consecutive snapshots for the same account.
+    """
+    __tablename__ = "balance_snapshots"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False, index=True)
+    actual_balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class EventLog(Base):
     __tablename__ = "event_log"
     __table_args__ = (Index("ix_event_log_created_event", "created_at", "event_type"),)

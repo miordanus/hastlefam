@@ -52,7 +52,11 @@ def test_month_summary_uncategorized(seeded_db):
 
     svc = FinanceService(seeded_db)
     result = svc.month_summary(str(HOUSEHOLD_ID))
-    assert result["top_categories"][0]["category"] == "без категории"
+    # Untagged transactions must NOT appear in top_categories/top_tags —
+    # they are tracked separately in untagged_count.
+    assert result["untagged_count"] == 1
+    category_names = [x["category"] for x in result["top_categories"]]
+    assert "без категории" not in category_names
 
 
 def test_upcoming_payments(seeded_db):
