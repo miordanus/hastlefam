@@ -1,5 +1,5 @@
 -- =============================================================================
--- HastleFam: Complete migration script (0001 → 0004)
+-- HastleFam: Complete migration script (0001 → 0009)
 -- Run this in the Supabase SQL Editor to apply all migrations.
 -- Safe to re-run (uses IF NOT EXISTS / conditional checks throughout).
 -- =============================================================================
@@ -546,7 +546,24 @@ DO $$ BEGIN
 END $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Done! All 8 migrations applied.
+-- Migration 0009: balance_snapshots table
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS hastlefam.balance_snapshots (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id         uuid NOT NULL REFERENCES hastlefam.accounts(id),
+    household_id       uuid NOT NULL REFERENCES hastlefam.households(id),
+    actual_balance     numeric(14, 2) NOT NULL,
+    note               varchar(255),
+    created_by_user_id uuid REFERENCES hastlefam.users(id),
+    created_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_balance_snapshots_account_id ON hastlefam.balance_snapshots(account_id);
+CREATE INDEX IF NOT EXISTS ix_balance_snapshots_household_id ON hastlefam.balance_snapshots(household_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Done! All 9 migrations applied.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 COMMIT;
