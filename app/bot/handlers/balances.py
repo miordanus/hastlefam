@@ -158,7 +158,7 @@ async def on_update_balance(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(StateFilter(BalancesStates.waiting_balance_amount))
 async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip().replace(",", ".")
+    text = (message.text or "").strip().replace(",", ".").replace(" ", "")
 
     data = await state.get_data()
     account_id = data.get("account_id", "")
