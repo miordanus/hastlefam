@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     database_url: str = Field(alias='DATABASE_URL')
     alembic_database_url: str = Field(alias='ALEMBIC_DATABASE_URL')
 
-    telegram_bot_token: str = Field(alias='TELEGRAM_BOT_TOKEN')
+    telegram_bot_token: str | None = Field(alias='TELEGRAM_BOT_TOKEN', default=None)
     openai_api_key: str = Field(alias='OPENAI_API_KEY')
     openai_model: str = Field(alias='OPENAI_MODEL', default='gpt-4.1-mini')
     redis_url: str = Field(alias='REDIS_URL', default='redis://localhost:6379/0')
