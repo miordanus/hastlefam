@@ -34,10 +34,10 @@ def _build_upcoming_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
-@router.message(Command("upcoming"))
-async def upcoming_command(message: Message):
+async def send_upcoming(message: Message, telegram_id: str) -> None:
+    """Shared logic for sending upcoming payments — used by /upcoming and month button."""
     with SessionLocal() as db:
-        user = _find_user(db, str(message.from_user.id)) if message.from_user else None
+        user = _find_user(db, telegram_id)
         if not user:
             await message.answer(
                 "⚠️ Я не вижу твой профиль в этом household.\n\n"
@@ -54,6 +54,11 @@ async def upcoming_command(message: Message):
     lines = [f"• {x['due_date']} · {x['title']} · {x['amount']} {x['currency']}" for x in items]
     keyboard = _build_upcoming_keyboard(items)
     await message.answer("🗓 Ближайшие платежи\n\n" + "\n".join(lines), reply_markup=keyboard)
+
+
+@router.message(Command("upcoming"))
+async def upcoming_command(message: Message):
+    await send_upcoming(message, str(message.from_user.id) if message.from_user else "")
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("paid:"))
