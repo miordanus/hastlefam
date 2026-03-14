@@ -25,12 +25,14 @@ _CB_DONE = "action:done:"
 _CB_TAG = "action:tag:"
 _CB_DATE = "action:date:"
 _CB_CURRENCY = "action:currency:"
+_CB_PLAN = "action:plan:"
 
 
 class InlineActionStates(StatesGroup):
     waiting_tag = State()
     waiting_date = State()
     waiting_currency = State()
+    waiting_plan_date = State()
 
 
 def build_post_capture_keyboard(
@@ -54,7 +56,7 @@ def build_post_capture_keyboard(
         buttons.append(InlineKeyboardButton(text="📅 Дата", callback_data=f"{_CB_DATE}{tx_id}"))
     if not currency_explicit:
         buttons.append(InlineKeyboardButton(text="💱 Валюта / курс", callback_data=f"{_CB_CURRENCY}{tx_id}"))
-
+    buttons.append(InlineKeyboardButton(text="🗓 Запланировать", callback_data=f"{_CB_PLAN}{tx_id}"))
     buttons.append(InlineKeyboardButton(text="✅ Готово", callback_data=f"{_CB_DONE}{tx_id}"))
 
     # Layout: up to 2 buttons per row, Done always last on its own row
@@ -245,4 +247,55 @@ async def on_currency_choice(callback: CallbackQuery) -> None:
     await callback.message.edit_text(
         f"✅ Валюту обновил.\nТеперь это {amount} {currency.value}.",
         reply_markup=None,
+    )
+
+
+# ─── Plan payment ──────────────────────────────────────────────────────────────
+
+@router.callback_query(lambda c: c.data and c.data.startswith(_CB_PLAN))
+async def on_plan_action(callback: CallbackQuery, state: FSMContext) -> None:
+    tx_id = callback.data[len(_CB_PLAN):]
+    await callback.answer()
+    await state.set_state(InlineActionStates.waiting_plan_date)
+    await state.update_data(tx_id=tx_id)
+    await callback.message.answer(
+        "🗓 Сделать из этого запланированный платёж?\n\nКогда он должен пройти?\nВведи дату: ГГГГ-ММ-ДД"
+    )
+
+
+@router.message(StateFilter(InlineActionStates.waiting_plan_date))
+async def on_plan_date_input(message: Message, state: FSMContext) -> None:
+    from datetime import date, datetime, timezone
+    from decimal import Decimal
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    tx_id = data.get("tx_id")
+
+    try:
+        due_date = date.fromisoformat(text)
+    except ValueError:
+        await message.answer("⚠️ Не понял дату. Попробуй формат ГГГГ-ММ-ДД (например, 2026-04-01).")
+        return
+
+    await state.clear()
+
+    with SessionLocal() as db:
+        tx = db.query(Transaction).filter(Transaction.id == uuid.UUID(tx_id)).first()
+        if not tx:
+            await message.answer("⚠️ Запись не найдена.")
+            return
+
+        from app.application.services.finance_service import FinanceService
+        FinanceService(db).create_planned_payment(
+            household_id=str(tx.household_id),
+            title=tx.merchant_raw or "платёж",
+            amount=Decimal(str(tx.amount)),
+            currency=tx.currency,
+            due_date=due_date,
+            primary_tag=tx.primary_tag,
+            linked_transaction_id=str(tx.id),
+        )
+
+    await message.answer(
+        f"✅ Запланировал.\n{tx.amount} {tx.currency.value} · {tx.merchant_raw or 'платёж'}\nСрок: {due_date.strftime('%d.%m.%Y')}"
     )

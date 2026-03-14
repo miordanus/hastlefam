@@ -481,7 +481,72 @@ CREATE INDEX IF NOT EXISTS ix_recurring_owner_id ON hastlefam.recurring_payments
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Done! All 4 migrations applied.
+-- Migration 0005: primary_tag + extra_tags on transactions
+-- ─────────────────────────────────────────────────────────────────────────────
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='hastlefam' AND table_name='transactions' AND column_name='primary_tag') THEN
+        ALTER TABLE hastlefam.transactions ADD COLUMN primary_tag varchar(64);
+        CREATE INDEX IF NOT EXISTS ix_transactions_primary_tag ON hastlefam.transactions (primary_tag);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='hastlefam' AND table_name='transactions' AND column_name='extra_tags') THEN
+        ALTER TABLE hastlefam.transactions ADD COLUMN extra_tags jsonb NOT NULL DEFAULT '[]'::jsonb;
+    END IF;
+END $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0006: planned_payments table
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS hastlefam.planned_payments (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    household_id uuid NOT NULL REFERENCES hastlefam.households(id),
+    owner_id uuid REFERENCES hastlefam.owners(id),
+    title varchar(255) NOT NULL,
+    amount numeric(14,2) NOT NULL,
+    currency varchar(10) NOT NULL,
+    due_date date NOT NULL,
+    primary_tag varchar(64),
+    extra_tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+    status varchar(20) NOT NULL DEFAULT 'planned',
+    note text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    linked_transaction_id uuid REFERENCES hastlefam.transactions(id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_planned_payments_household_due ON hastlefam.planned_payments (household_id, due_date);
+CREATE INDEX IF NOT EXISTS ix_planned_payments_status ON hastlefam.planned_payments (status);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0007: add 'exchange' to transaction_direction_enum
+-- NOTE: Must run OUTSIDE a transaction block (COMMIT first, then run this).
+-- ─────────────────────────────────────────────────────────────────────────────
+
+COMMIT;
+
+ALTER TYPE hastlefam.transaction_direction_enum ADD VALUE IF NOT EXISTS 'exchange';
+
+BEGIN;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0008: exchange fields on transactions
+-- ─────────────────────────────────────────────────────────────────────────────
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='hastlefam' AND table_name='transactions' AND column_name='from_amount') THEN
+        ALTER TABLE hastlefam.transactions ADD COLUMN from_amount numeric(14,2);
+        ALTER TABLE hastlefam.transactions ADD COLUMN from_currency varchar(10);
+        ALTER TABLE hastlefam.transactions ADD COLUMN to_amount numeric(14,2);
+        ALTER TABLE hastlefam.transactions ADD COLUMN to_currency varchar(10);
+        ALTER TABLE hastlefam.transactions ADD COLUMN exchange_rate numeric(18,6);
+    END IF;
+END $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Done! All 8 migrations applied.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 COMMIT;

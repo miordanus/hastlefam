@@ -45,6 +45,7 @@ class TransactionDirection(StrEnum):
     EXPENSE = 'expense'
     INCOME = 'income'
     TRANSFER = 'transfer'
+    EXCHANGE = 'exchange'
 
 
 class DraftType(StrEnum):
