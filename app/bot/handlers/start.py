@@ -26,11 +26,10 @@ async def start(message: Message):
         return
 
     await message.answer(
-        "✅ HastleFam на связи.\n\n"
-        "Можно просто писать сообщением:\n"
-        "• `149 supermarket`\n"
-        "• `49.90 netflix EUR`\n"
-        "• `120 taxi #transport`\n"
-        "• `+5000 зарплата` — доход\n\n"
-        "Дальше я сам предложу нужные действия кнопками."
+        "💰 HastleFam — бот для учёта денег.\n\n"
+        "Просто напиши сумму и название:\n"
+        "  `149 biedronka`\n"
+        "  `49.90 netflix EUR`\n"
+        "  `+5000 зарплата`\n\n"
+        "/help — все команды"
     )

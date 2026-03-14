@@ -88,7 +88,7 @@ async def on_tag_action(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(InlineActionStates.waiting_tag)
     await state.update_data(tx_id=tx_id, original_message_id=callback.message.message_id)
     await callback.message.answer(
-        "🏷 Категория не заполнена.\nВыбери её сейчас, чтобы отчёт не был кривым.\n\nНапиши категорию или `#тег`:"
+        "🏷 Категория не заполнена.\nВыбери её сейчас, чтобы отчёт не был кривым.\n\nНапиши категорию или `#тег`:\n\n/cancel — отменить"
     )
 
 
@@ -259,7 +259,7 @@ async def on_plan_action(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(InlineActionStates.waiting_plan_date)
     await state.update_data(tx_id=tx_id)
     await callback.message.answer(
-        "🗓 Сделать из этого запланированный платёж?\n\nКогда он должен пройти?\nВведи дату: ГГГГ-ММ-ДД"
+        "🗓 Сделать из этого запланированный платёж?\n\nКогда он должен пройти?\nВведи дату: ГГГГ-ММ-ДД\n\n/cancel — отменить"
     )
 
 

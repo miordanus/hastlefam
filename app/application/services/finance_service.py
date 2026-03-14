@@ -41,7 +41,8 @@ class FinanceService:
         # Per-currency totals
         spend_by_currency: dict[str, Decimal] = {}
         income_by_currency: dict[str, Decimal] = {}
-        by_tag: dict[str, Decimal] = {}
+        # by_tag: {tag: {currency: amount}}
+        by_tag: dict[str, dict[str, Decimal]] = {}
         untagged_count = 0
 
         for tx in rows:
@@ -54,13 +55,20 @@ class FinanceService:
             if tx.direction == TransactionDirection.EXPENSE:
                 spend_by_currency[cur] = spend_by_currency.get(cur, Decimal("0")) + amount
                 if tx.primary_tag:
-                    by_tag[tx.primary_tag] = by_tag.get(tx.primary_tag, Decimal("0")) + amount
+                    tag_currencies = by_tag.setdefault(tx.primary_tag, {})
+                    tag_currencies[cur] = tag_currencies.get(cur, Decimal("0")) + amount
                 else:
                     untagged_count += 1
             elif tx.direction == TransactionDirection.INCOME:
                 income_by_currency[cur] = income_by_currency.get(cur, Decimal("0")) + amount
 
-        top_tags = sorted(by_tag.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        # Sort tags by total amount across all currencies
+        tag_totals = {tag: sum(curs.values()) for tag, curs in by_tag.items()}
+        top_tag_names = sorted(tag_totals, key=lambda t: tag_totals[t], reverse=True)[:5]
+        top_tags = [
+            {"tag": tag, "by_currency": by_tag[tag], "amount": tag_totals[tag]}
+            for tag in top_tag_names
+        ]
 
         upcoming = self.upcoming_planned(household_id, until_date=month_end)
 
@@ -68,7 +76,7 @@ class FinanceService:
             "period": {"month_start": month_start.isoformat(), "today": today.isoformat()},
             "spend_by_currency": spend_by_currency,
             "income_by_currency": income_by_currency,
-            "top_tags": [{"tag": k, "amount": v} for k, v in top_tags],
+            "top_tags": top_tags,
             "upcoming_until_month_end": upcoming,
             "untagged_count": untagged_count,
             # Legacy keys kept for existing API routes
@@ -76,7 +84,7 @@ class FinanceService:
                 "spend_mtd": sum(spend_by_currency.values(), Decimal("0")),
                 "income_mtd": sum(income_by_currency.values(), Decimal("0")),
             },
-            "top_categories": [{"category": k, "amount": v} for k, v in top_tags],
+            "top_categories": [{"category": t["tag"], "amount": t["amount"]} for t in top_tags],
             "biggest_expenses": [],
         }
 

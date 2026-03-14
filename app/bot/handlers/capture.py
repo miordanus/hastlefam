@@ -87,7 +87,13 @@ async def _capture_text(message: Message, text: str) -> None:
         return
 
     if not result.merchant:
-        await message.answer("⚠️ Не вижу, что это за трата.\nДобавь короткое название после суммы.")
+        if result.amount is not None:
+            await message.answer(
+                f"⚠️ Записал {result.amount} — но куда?\n"
+                f"Добавь название: `{result.amount} кофе`"
+            )
+        else:
+            await message.answer("⚠️ Не вижу, что это за трата.\nДобавь короткое название после суммы.")
         return
 
     try:
@@ -105,6 +111,13 @@ async def _capture_text(message: Message, text: str) -> None:
                 result.merchant,
                 tx_date,
             )
+
+            existing = db.query(Transaction.id).filter(
+                Transaction.dedup_fingerprint == fingerprint,
+            ).first()
+            if existing:
+                await message.answer("Похоже на дубль, пропустил.")
+                return
 
             tx = Transaction(
                 id=uuid.uuid4(),
@@ -139,9 +152,12 @@ async def _capture_text(message: Message, text: str) -> None:
         currency_explicit=result.currency_explicit,
     )
 
+    from app.domain.enums import TransactionDirection as TD
+    direction_label = " (доход)" if result.direction == TD.INCOME else ""
+
     if result.primary_tag:
-        body = f"✅ Записал.\n{result.amount} {result.currency.value} · {result.merchant} · {result.primary_tag}"
+        body = f"✅ Записал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant} · {result.primary_tag}"
     else:
-        body = f"✅ Записал.\n{result.amount} {result.currency.value} · {result.merchant}"
+        body = f"✅ Записал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant}"
 
     await message.answer(body, reply_markup=keyboard)
