@@ -166,25 +166,43 @@ async def on_date_choice(callback: CallbackQuery, state: FSMContext) -> None:
         await state.set_state(InlineActionStates.waiting_date)
         await state.update_data(tx_id=tx_id)
         await callback.message.edit_text(
-            "Введи дату в формате ГГГГ-ММ-ДД:",
+            "Введи дату: 26-3 или 2026-03-26",
             reply_markup=None,
         )
 
 
 @router.message(StateFilter(InlineActionStates.waiting_date))
 async def on_date_input(message: Message, state: FSMContext) -> None:
+    import re
     from datetime import datetime, timezone
     text = (message.text or "").strip()
     data = await state.get_data()
     tx_id = data.get("tx_id")
 
+    parsed_date = None
+    from datetime import date
+
+    # Try ISO format first: YYYY-MM-DD
     try:
-        from datetime import date
         parsed_date = date.fromisoformat(text)
-        new_dt = datetime(parsed_date.year, parsed_date.month, parsed_date.day, tzinfo=timezone.utc)
     except ValueError:
-        await message.answer("⚠️ Не понял дату. Попробуй формат ГГГГ-ММ-ДД (например, 2026-03-10).")
+        pass
+
+    # Try short format: DD-MM, DD.MM, DD/MM
+    if parsed_date is None:
+        m = re.match(r"^(\d{1,2})[.\-/](\d{1,2})$", text)
+        if m:
+            try:
+                today = datetime.now(timezone.utc).date()
+                parsed_date = date(today.year, int(m.group(2)), int(m.group(1)))
+            except ValueError:
+                pass
+
+    if parsed_date is None:
+        await message.answer("⚠️ Не понял дату. Попробуй: 26-3 или 2026-03-26")
         return
+
+    new_dt = datetime(parsed_date.year, parsed_date.month, parsed_date.day, tzinfo=timezone.utc)
 
     await _update_tx_date(tx_id, new_dt)
     await state.clear()
@@ -258,22 +276,36 @@ async def on_plan_action(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(InlineActionStates.waiting_plan_date)
     await state.update_data(tx_id=tx_id)
     await callback.message.answer(
-        "🗓 Сделать из этого запланированный платёж?\n\nКогда он должен пройти?\nВведи дату: ГГГГ-ММ-ДД\n\n/cancel — отменить"
+        "🗓 Сделать из этого запланированный платёж?\n\nКогда он должен пройти?\nВведи дату: 26-3 или 2026-03-26\n\n/cancel — отменить"
     )
 
 
 @router.message(StateFilter(InlineActionStates.waiting_plan_date))
 async def on_plan_date_input(message: Message, state: FSMContext) -> None:
+    import re as _re
     from datetime import date, datetime, timezone
     from decimal import Decimal
     text = (message.text or "").strip()
     data = await state.get_data()
     tx_id = data.get("tx_id")
 
+    due_date = None
     try:
         due_date = date.fromisoformat(text)
     except ValueError:
-        await message.answer("⚠️ Не понял дату. Попробуй формат ГГГГ-ММ-ДД (например, 2026-04-01).")
+        pass
+
+    if due_date is None:
+        m = _re.match(r"^(\d{1,2})[.\-/](\d{1,2})$", text)
+        if m:
+            try:
+                today = datetime.now(timezone.utc).date()
+                due_date = date(today.year, int(m.group(2)), int(m.group(1)))
+            except ValueError:
+                pass
+
+    if due_date is None:
+        await message.answer("⚠️ Не понял дату. Попробуй: 26-3 или 2026-03-26")
         return
 
     await state.clear()
