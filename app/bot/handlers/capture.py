@@ -29,8 +29,8 @@ def _find_user(db, telegram_id: str):
     return db.query(User).filter(User.telegram_id == telegram_id, User.is_active.is_(True)).first()
 
 
-def _tx_fingerprint(household_id: str, amount: Decimal, currency: str, merchant: str, tx_date: str) -> str:
-    payload = f"{household_id}|{tx_date}|{amount}|{currency}|{merchant.strip().lower()}|telegram"
+def _tx_fingerprint(household_id: str, amount: Decimal, currency: str, merchant: str, tx_date: str, direction: str) -> str:
+    payload = f"{household_id}|{tx_date}|{amount}|{currency}|{merchant.strip().lower()}|{direction}|telegram"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -110,6 +110,7 @@ async def _capture_text(message: Message, text: str) -> None:
                 result.currency.value,
                 result.merchant,
                 tx_date,
+                result.direction.value,
             )
 
             existing = db.query(Transaction.id).filter(

@@ -45,10 +45,10 @@ async def send_upcoming(message: Message, telegram_id: str) -> None:
                 "Если это твой бот — проверь привязку в базе."
             )
             return
-        items = FinanceService(db).upcoming_planned(str(user.household_id), days=7)
+        items = FinanceService(db).upcoming_planned(str(user.household_id), days=365)
 
     if not items:
-        await message.answer("🗓 На ближайшие 7 дней ничего не запланировано.")
+        await message.answer("🗓 Нет запланированных платежей.")
         return
 
     lines = [f"• {x['due_date']} · {x['title']} · {x['amount']} {x['currency']}" for x in items]

@@ -20,7 +20,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from app.infrastructure.db.models import Account, BalanceSnapshot, User
+from app.domain.enums import TransactionDirection
+from app.infrastructure.db.models import Account, BalanceSnapshot, Transaction, User
 from app.infrastructure.db.session import SessionLocal
 
 router = Router()
@@ -197,11 +198,35 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
             created_by_user_id=user_id,
         )
         db.add(snapshot)
+
+        # Log delta as a categorized transaction
+        prev_amount = prev.actual_balance if prev else None
+        if prev_amount is not None:
+            delta = amount - prev_amount
+            if delta != 0:
+                from datetime import datetime, timezone as tz
+                direction = TransactionDirection.INCOME if delta > 0 else TransactionDirection.EXPENSE
+                tx = Transaction(
+                    id=uuid.uuid4(),
+                    household_id=acc.household_id,
+                    user_id=user_id,
+                    account_id=acc.id,
+                    direction=direction,
+                    amount=abs(delta),
+                    currency=acc.currency,
+                    occurred_at=datetime.now(tz.utc),
+                    merchant_raw=f"Корректировка: {acc.name}",
+                    source="balance_adjustment",
+                    parse_status="ok",
+                    primary_tag="balance_adjustment",
+                    extra_tags=[],
+                )
+                db.add(tx)
+
         db.commit()
 
         acc_name = acc.name
         acc_currency = acc.currency.value
-        prev_amount = prev.actual_balance if prev else None
 
     await state.clear()
 
