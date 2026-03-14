@@ -228,6 +228,37 @@ class FinanceService:
         self.db.commit()
         return tx
 
+    def upcoming_transactions(self, household_id: str) -> list[dict[str, Any]]:
+        """All transactions with occurred_at > today (future-dated entries = planned activity)."""
+        today = datetime.now(timezone.utc).date()
+        tomorrow_dt = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(days=1)
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.occurred_at >= tomorrow_dt,
+                Transaction.direction != TransactionDirection.TRANSFER,
+                Transaction.direction != TransactionDirection.EXCHANGE,
+            )
+            .order_by(Transaction.occurred_at.asc())
+            .all()
+        )
+
+        return [
+            {
+                "id": str(r.id),
+                "title": r.merchant_raw or "",
+                "amount": r.amount,
+                "currency": r.currency.value if r.currency else "RUB",
+                "due_date": r.occurred_at.date().isoformat(),
+                "primary_tag": r.primary_tag,
+                "direction": r.direction.value,
+            }
+            for r in rows
+        ]
+
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 
     def upcoming_payments(self, household_id: str, days: int = 7, until_date: date | None = None) -> list[dict[str, Any]]:
