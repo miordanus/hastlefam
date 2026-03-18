@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.domain.enums import Currency, TransactionDirection
-from app.infrastructure.db.models import PlannedPayment, Transaction
+from app.infrastructure.db.models import Account, BalanceSnapshot, PlannedPayment, Transaction
 
 
 class FinanceService:
@@ -258,6 +258,112 @@ class FinanceService:
             }
             for r in rows
         ]
+
+    # ─── Accounts ─────────────────────────────────────────────────────────────
+
+    def get_or_create_default_account(self, household_id: str) -> Account:
+        """Return (creating if needed) the default 'Наличные' RUB account."""
+        import uuid as _u
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        acc = (
+            self.db.query(Account)
+            .filter(
+                Account.household_id == hid,
+                Account.name == "Наличные",
+                Account.currency == Currency.RUB,
+                Account.is_active.is_(True),
+            )
+            .first()
+        )
+        if acc is None:
+            acc = Account(
+                id=_u.uuid4(),
+                household_id=hid,
+                name="Наличные",
+                currency=Currency.RUB,
+                is_shared=True,
+                is_active=True,
+            )
+            self.db.add(acc)
+            self.db.flush()
+        return acc
+
+    def create_account(
+        self,
+        household_id: str,
+        name: str,
+        currency: Currency,
+        owner_user_id: str | None = None,
+        is_shared: bool = True,
+    ) -> Account:
+        import uuid as _u
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        acc = Account(
+            id=_u.uuid4(),
+            household_id=hid,
+            owner_user_id=_uuid.UUID(owner_user_id) if owner_user_id else None,
+            name=name,
+            currency=currency,
+            is_shared=is_shared,
+            is_active=True,
+        )
+        self.db.add(acc)
+        self.db.commit()
+        return acc
+
+    def update_balance_snapshot(
+        self,
+        account_id: str,
+        household_id: str,
+        new_balance: Decimal,
+        user_id: str | None = None,
+    ) -> tuple[BalanceSnapshot, Transaction | None]:
+        """Save new balance snapshot; create a delta transaction visible in /inbox."""
+        import uuid as _u
+        aid = _uuid.UUID(account_id) if isinstance(account_id, str) else account_id
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        uid = _uuid.UUID(user_id) if user_id else None
+
+        acc = self.db.query(Account).filter(Account.id == aid).first()
+        prev = (
+            self.db.query(BalanceSnapshot)
+            .filter(BalanceSnapshot.account_id == aid)
+            .order_by(BalanceSnapshot.created_at.desc())
+            .first()
+        )
+
+        snapshot = BalanceSnapshot(
+            id=_u.uuid4(),
+            account_id=aid,
+            household_id=hid,
+            actual_balance=new_balance,
+            created_by_user_id=uid,
+        )
+        self.db.add(snapshot)
+
+        delta_tx = None
+        if prev is not None:
+            delta = new_balance - Decimal(str(prev.actual_balance))
+            if delta != 0 and acc is not None:
+                direction = TransactionDirection.INCOME if delta > 0 else TransactionDirection.EXPENSE
+                delta_tx = Transaction(
+                    id=_u.uuid4(),
+                    household_id=hid,
+                    user_id=uid,
+                    account_id=aid,
+                    direction=direction,
+                    amount=abs(delta),
+                    currency=acc.currency,
+                    occurred_at=datetime.now(timezone.utc),
+                    merchant_raw=f"Корректировка: {acc.name}",
+                    source="telegram",
+                    parse_status="needs_correction",
+                    extra_tags=[],
+                )
+                self.db.add(delta_tx)
+
+        self.db.commit()
+        return snapshot, delta_tx
 
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 

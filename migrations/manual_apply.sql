@@ -563,7 +563,64 @@ CREATE INDEX IF NOT EXISTS ix_balance_snapshots_account_id ON hastlefam.balance_
 CREATE INDEX IF NOT EXISTS ix_balance_snapshots_household_id ON hastlefam.balance_snapshots(household_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Done! All 9 migrations applied.
+-- Migration 0010: account_id index on transactions
+-- ─────────────────────────────────────────────────────────────────────────────
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='hastlefam'
+                     AND table_name='transactions'
+                     AND column_name='account_id') THEN
+        ALTER TABLE hastlefam.transactions
+            ADD COLUMN account_id UUID REFERENCES hastlefam.accounts(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS ix_transactions_account_id
+    ON hastlefam.transactions (account_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0011: fx_rates table
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS hastlefam.fx_rates (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    date          DATE NOT NULL,
+    from_currency VARCHAR(10) NOT NULL,
+    to_currency   VARCHAR(10) NOT NULL,
+    rate          NUMERIC(18, 6) NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (date, from_currency, to_currency)
+);
+
+CREATE INDEX IF NOT EXISTS ix_fx_rates_date ON hastlefam.fx_rates (date);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Migration 0012: backfill default "Наличные RUB" account per household
+-- ─────────────────────────────────────────────────────────────────────────────
+
+INSERT INTO hastlefam.accounts (id, household_id, name, currency, is_shared, is_active, created_at)
+SELECT gen_random_uuid(), h.id, 'Наличные', 'RUB', true, true, now()
+FROM hastlefam.households h
+WHERE NOT EXISTS (
+    SELECT 1 FROM hastlefam.accounts a
+    WHERE a.household_id = h.id
+      AND a.name = 'Наличные'
+      AND a.currency = 'RUB'
+);
+
+UPDATE hastlefam.transactions t
+SET account_id = (
+    SELECT a.id FROM hastlefam.accounts a
+    WHERE a.household_id = t.household_id
+      AND a.name = 'Наличные'
+      AND a.currency = 'RUB'
+    LIMIT 1
+)
+WHERE t.account_id IS NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Done! All 12 migrations applied.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 COMMIT;

@@ -20,6 +20,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.application.services.fx_service import convert_to_rub
 from app.domain.enums import TransactionDirection
 from app.infrastructure.db.models import Account, BalanceSnapshot, Transaction, User
 from app.infrastructure.db.session import SessionLocal
@@ -124,6 +125,28 @@ async def send_balances(message: Message, telegram_id: str) -> None:
 
         snapshots = {acc.id: _latest_snapshot(db, acc.id) for acc in accounts}
         text = "💼 Счета\n\n" + _format_accounts(accounts, snapshots)
+
+        # Grand total in RUB
+        from datetime import date as _date
+        today = _date.today()
+        total_rub = Decimal("0")
+        unavailable = False
+        for acc in accounts:
+            snap = snapshots.get(acc.id)
+            if snap is None:
+                continue
+            bal = Decimal(str(snap.actual_balance))
+            rub = convert_to_rub(bal, acc.currency.value, today, db)
+            if rub is None:
+                unavailable = True
+            else:
+                total_rub += rub
+        if unavailable:
+            text += "\n\n≈ ~ RUB (курс недоступен)"
+        else:
+            formatted = f"{total_rub:,.0f}".replace(",", " ")
+            text += f"\n\n≈ {formatted} RUB"
+
         keyboard = _build_accounts_keyboard(accounts)
 
     await message.answer(text, reply_markup=keyboard)
@@ -216,9 +239,8 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
                     currency=acc.currency,
                     occurred_at=datetime.now(tz.utc),
                     merchant_raw=f"Корректировка: {acc.name}",
-                    source="balance_adjustment",
-                    parse_status="ok",
-                    primary_tag="balance_adjustment",
+                    source="telegram",
+                    parse_status="needs_correction",
                     extra_tags=[],
                 )
                 db.add(tx)

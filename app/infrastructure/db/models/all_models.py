@@ -178,7 +178,10 @@ class RawImportTransaction(Base):
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    __table_args__ = (Index("ix_transactions_household_occurred_at", "household_id", "occurred_at"),)
+    __table_args__ = (
+        Index("ix_transactions_household_occurred_at", "household_id", "occurred_at"),
+        Index("ix_transactions_account_id", "account_id"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("owners.id"), index=True)
@@ -324,4 +327,15 @@ class EventLog(Base):
     entity_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     severity: Mapped[str] = mapped_column(String(16), default="info")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class FxRate(Base):
+    """Daily FX rate snapshot fetched from exchangerate-api.com."""
+    __tablename__ = "fx_rates"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    from_currency: Mapped[str] = mapped_column(String(10), nullable=False)
+    to_currency: Mapped[str] = mapped_column(String(10), nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

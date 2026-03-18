@@ -31,6 +31,13 @@ async def send_daily_status(bot) -> None:
     from app.infrastructure.db.models import User
     from app.infrastructure.db.session import SessionLocal
 
+    # Refresh FX rates before sending digest
+    try:
+        from app.application.services.fx_service import fetch_and_store_rates
+        await fetch_and_store_rates()
+    except Exception as exc:
+        log.warning("daily_status: fx rate fetch failed: %s", exc)
+
     try:
         with SessionLocal() as db:
             users = db.query(User).filter(User.is_active.is_(True)).all()

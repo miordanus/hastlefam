@@ -15,6 +15,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.services.finance_service import FinanceService
+from app.application.services.fx_service import convert_to_rub
 from app.infrastructure.db.models import User
 from app.infrastructure.db.session import SessionLocal
 
@@ -107,10 +108,74 @@ def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboard
         InlineKeyboardButton(text="🗓 Планы", callback_data="month:open_upcoming"),
         InlineKeyboardButton(text="💼 Балансы", callback_data="month:open_balances"),
     ])
+    rows.append([
+        InlineKeyboardButton(
+            text="📊 Инсайты",
+            callback_data=f"month:insights:{for_date.isoformat()}",
+        )
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _render_month(summary: dict, for_date: date) -> tuple[str, InlineKeyboardMarkup]:
+def _bar_chart(tags: list, prev_tags: list) -> str:
+    """Build ASCII bar chart for top tags with MoM dynamics."""
+    if not tags:
+        return ""
+    prev_map = {t["tag"]: t["amount"] for t in prev_tags}
+    max_amt = max((t["amount"] for t in tags), default=Decimal("1")) or Decimal("1")
+    bar_width = 10
+    lines = []
+    for t in tags[:5]:
+        tag = t["tag"]
+        amt = t["amount"]
+        filled = round(float(amt / max_amt) * bar_width)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        amt_str = f"{amt:,.0f}".replace(",", " ")
+        # Dynamics vs previous month
+        prev_amt = prev_map.get(tag)
+        if prev_amt is None:
+            dyn = " new"
+        elif prev_amt > 0:
+            pct = (amt - prev_amt) / prev_amt * 100
+            if pct >= 1:
+                dyn = f" ▲ +{pct:.0f}%"
+            elif pct <= -1:
+                dyn = f" ▼ {pct:.0f}%"
+            else:
+                dyn = ""
+        else:
+            dyn = ""
+        lines.append(f"#{tag} {bar} {amt_str}{dyn}")
+    return "\n".join(lines)
+
+
+def _compute_grand_total_rub(
+    spend_by_currency: dict[str, Decimal],
+    for_date: date,
+    db,
+) -> str:
+    """Return a formatted grand-total RUB string, or unavailable note."""
+    if not spend_by_currency:
+        return "≈ 0 RUB"
+    total = Decimal("0")
+    unavailable = False
+    for cur, amt in spend_by_currency.items():
+        converted = convert_to_rub(amt, cur, for_date, db)
+        if converted is None:
+            unavailable = True
+        else:
+            total += converted
+    if unavailable:
+        return "≈ ~ RUB (курс недоступен)"
+    return f"≈ {total:,.0f} RUB".replace(",", " ")
+
+
+def _render_month(
+    summary: dict,
+    for_date: date,
+    grand_total_rub: str | None = None,
+    prev_summary: dict | None = None,
+) -> tuple[str, InlineKeyboardMarkup]:
     """Render month summary text and keyboard."""
     month_label = f"{_MONTH_RU[for_date.month]} {for_date.year}"
 
@@ -134,21 +199,11 @@ def _render_month(summary: dict, for_date: date) -> tuple[str, InlineKeyboardMar
     else:
         planned_block = "• Ничего не запланировано."
 
-    # Top actual tags only
+    # Top actual tags — ASCII bar chart with MoM dynamics
     tags = summary["top_tags"]
+    prev_tags = (prev_summary or {}).get("top_tags", [])
     if tags:
-        tag_lines = []
-        for x in tags[:5]:
-            by_cur = x.get("by_currency")
-            if by_cur and len(by_cur) == 1:
-                cur, amt = next(iter(by_cur.items()))
-                tag_lines.append(f"• #{x['tag']}: {amt} {cur}")
-            elif by_cur:
-                parts = ", ".join(f"{amt} {cur}" for cur, amt in by_cur.items())
-                tag_lines.append(f"• #{x['tag']}: {parts}")
-            else:
-                tag_lines.append(f"• #{x['tag']}: {x['amount']}")
-        tags_block = "\n".join(tag_lines)
+        tags_block = _bar_chart(tags, prev_tags)
     else:
         tags_block = "• Тегов пока нет."
 
@@ -158,6 +213,10 @@ def _render_month(summary: dict, for_date: date) -> tuple[str, InlineKeyboardMar
         f"📊 {month_label}",
         "",
         f"💸 Потрачено:\n{spend_block}",
+    ]
+    if grand_total_rub:
+        lines.append(grand_total_rub)
+    lines += [
         "",
         f"💰 Пришло:\n{income_block}",
         "",
@@ -186,9 +245,12 @@ async def month_command(message: Message):
             return
 
         for_date = _parse_month_arg(message.text or "") or datetime.now(timezone.utc).date()
-        summary = FinanceService(db).month_summary(str(user.household_id), for_date=for_date)
+        svc = FinanceService(db)
+        summary = svc.month_summary(str(user.household_id), for_date=for_date)
+        prev_summary = svc.month_summary(str(user.household_id), for_date=_prev_month(for_date))
+        grand_total_rub = _compute_grand_total_rub(summary["spend_by_currency"], for_date, db)
 
-    text, keyboard = _render_month(summary, for_date)
+    text, keyboard = _render_month(summary, for_date, grand_total_rub, prev_summary)
     await message.answer(text, reply_markup=keyboard)
 
 
@@ -205,9 +267,12 @@ async def on_month_navigate(callback: CallbackQuery) -> None:
         user = _find_user(db, str(callback.from_user.id)) if callback.from_user else None
         if not user:
             return
-        summary = FinanceService(db).month_summary(str(user.household_id), for_date=for_date)
+        svc = FinanceService(db)
+        summary = svc.month_summary(str(user.household_id), for_date=for_date)
+        prev_summary = svc.month_summary(str(user.household_id), for_date=_prev_month(for_date))
+        grand_total_rub = _compute_grand_total_rub(summary["spend_by_currency"], for_date, db)
 
-    text, keyboard = _render_month(summary, for_date)
+    text, keyboard = _render_month(summary, for_date, grand_total_rub, prev_summary)
     await callback.message.edit_text(text, reply_markup=keyboard)
 
 
@@ -230,3 +295,31 @@ async def on_month_balances(callback: CallbackQuery) -> None:
     await callback.answer()
     from app.bot.handlers.balances import send_balances
     await send_balances(callback.message, str(callback.from_user.id))
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("month:insights:"))
+async def on_month_insights(callback: CallbackQuery) -> None:
+    await callback.answer()
+    date_str = callback.data[len("month:insights:"):]
+    try:
+        for_date = date.fromisoformat(date_str)
+    except ValueError:
+        return
+
+    await callback.message.answer("⏳ Анализирую...")
+
+    with SessionLocal() as db:
+        user = _find_user(db, str(callback.from_user.id)) if callback.from_user else None
+        if not user:
+            await callback.message.answer("⚠️ Профиль не найден.")
+            return
+
+        from app.application.services.insights_service import get_insights
+        text = await get_insights(
+            household_id=str(user.household_id),
+            year=for_date.year,
+            month=for_date.month,
+            db=db,
+        )
+
+    await callback.message.answer(f"📊 Инсайты за {_MONTH_RU[for_date.month]} {for_date.year}:\n\n{text}")
