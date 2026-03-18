@@ -1,7 +1,10 @@
 import asyncio
 import logging
+import os
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramConflictError
 from aiogram.types import ErrorEvent
 from app.bot.handlers.cancel import router as cancel_router
 from app.bot.handlers.start import router as start_router
@@ -23,6 +26,27 @@ log = logging.getLogger(__name__)
 _POLLER_LOCK_KEY = "hastlefam:bot:poller"
 _POLLER_LOCK_TTL = 60  # seconds
 _LOCK_RENEW_INTERVAL = 20  # seconds
+
+
+class _ConflictExitSession(AiohttpSession):
+    """Bot session that exits immediately on TelegramConflictError.
+
+    During Railway rolling deploys, the old instance and the new instance
+    briefly coexist. Without a Redis lock, both would fight forever over
+    the Telegram long-poll connection. Instead, the instance that loses
+    the conflict exits immediately (os._exit), which lets Railway restart
+    it. By the time it restarts, the old instance is gone and polling succeeds.
+    """
+
+    async def make_request(self, bot, method, **kwargs):
+        try:
+            return await super().make_request(bot, method, **kwargs)
+        except TelegramConflictError:
+            log.error(
+                "TelegramConflictError: another instance is polling. "
+                "Exiting so Railway restarts this instance after the conflict clears."
+            )
+            os._exit(1)
 
 
 async def _renew_lock(lock) -> None:
@@ -51,7 +75,6 @@ async def _setup_redis(redis_url: str):
 
     try:
         client = aioredis.from_url(redis_url, decode_responses=True)
-        # Quick connectivity check
         await client.ping()
         lock = client.lock(_POLLER_LOCK_KEY, timeout=_POLLER_LOCK_TTL)
         acquired = await lock.acquire(blocking=False)
@@ -62,7 +85,7 @@ async def _setup_redis(redis_url: str):
         log.info("poller lock acquired")
         return client, lock
     except Exception as exc:
-        log.warning("Redis unavailable (%s) — poller lock and idempotency disabled", exc)
+        log.warning("Redis unavailable (%s) — poller lock disabled", exc)
         return None, None
 
 
@@ -70,12 +93,13 @@ async def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
 
+    # Suppress noisy APScheduler internal logs
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
+
     if not settings.telegram_bot_token:
         log.error(
             "TELEGRAM_BOT_TOKEN is not set — bot worker cannot start. "
-            "This process belongs to the Worker service only. "
-            "If you see this on the Web service, remove TELEGRAM_BOT_TOKEN "
-            "from its env vars or fix the start command."
+            "This process belongs to the Worker service only."
         )
         return
 
@@ -85,7 +109,7 @@ async def main() -> None:
     if redis_client == "exit":
         return
 
-    bot = Bot(token=settings.telegram_bot_token)
+    bot = Bot(token=settings.telegram_bot_token, session=_ConflictExitSession())
     dp = Dispatcher()
 
     # Logging middleware first — always runs, even if idempotency drops the message
@@ -120,16 +144,12 @@ async def main() -> None:
         )
         return True
 
-    log.info(
-        "routers registered: %d",
-        len(dp.sub_routers),
-    )
+    log.info("routers registered: %d", len(dp.sub_routers))
 
-    # Daily status scheduler (10:00 MSK)
+    # Daily status scheduler (10:00 MSK) — start_daily_status_scheduler logs its own message
     try:
         from app.application.jobs.daily_status_job import start_daily_status_scheduler
         start_daily_status_scheduler(bot)
-        log.info("daily_status scheduler started (10:00 MSK)")
     except ImportError:
         log.info("apscheduler not installed — daily digest disabled")
     except Exception as e:
@@ -139,7 +159,7 @@ async def main() -> None:
 
     renew_task = asyncio.create_task(_renew_lock(lock)) if lock else None
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, drop_pending_updates=False)
     except Exception as exc:
         log.error("bot polling failed: %s", exc, exc_info=True)
         raise
