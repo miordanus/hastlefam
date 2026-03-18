@@ -120,10 +120,14 @@ async def _capture_text(message: Message, text: str) -> None:
                 await message.answer("Похоже на дубль, пропустил.")
                 return
 
+            from app.application.services.finance_service import FinanceService
+            default_account = FinanceService(db).get_or_create_default_account(str(user.household_id))
+
             tx = Transaction(
                 id=uuid.uuid4(),
                 household_id=user.household_id,
                 user_id=user.id,
+                account_id=default_account.id,
                 direction=result.direction,
                 amount=result.amount,
                 currency=result.currency,
