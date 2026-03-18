@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import ErrorEvent
 from app.bot.handlers.cancel import router as cancel_router
 from app.bot.handlers.start import router as start_router
 from app.bot.handlers.help import router as help_router
@@ -69,6 +70,15 @@ async def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
 
+    if not settings.telegram_bot_token:
+        log.error(
+            "TELEGRAM_BOT_TOKEN is not set — bot worker cannot start. "
+            "This process belongs to the Worker service only. "
+            "If you see this on the Web service, remove TELEGRAM_BOT_TOKEN "
+            "from its env vars or fix the start command."
+        )
+        return
+
     redis_client, lock = await _setup_redis(settings.redis_url)
 
     # If lock is held by another instance, exit cleanly
@@ -78,12 +88,13 @@ async def main() -> None:
     bot = Bot(token=settings.telegram_bot_token)
     dp = Dispatcher()
 
-    # Layer B: delivery idempotency (only when Redis is available)
+    # Logging middleware first — always runs, even if idempotency drops the message
+    dp.message.middleware(LoggingMiddleware())
+
+    # Delivery idempotency (only when Redis is available)
     if redis_client is not None:
         from app.bot.middlewares.idempotency import IdempotencyMiddleware
         dp.message.middleware(IdempotencyMiddleware(redis_client))
-
-    dp.message.middleware(LoggingMiddleware())
 
     # Routers: cancel first (must intercept /cancel in any state),
     # then most-specific, catch-all capture last
@@ -99,11 +110,26 @@ async def main() -> None:
     dp.include_router(balances_router)
     dp.include_router(capture_router)
 
+    # Catch-all error handler — log every unhandled exception from any handler
+    @dp.errors()
+    async def _error_handler(event: ErrorEvent) -> bool:
+        log.error(
+            "unhandled exception in handler update_id=%s",
+            getattr(event.update, "update_id", "?"),
+            exc_info=event.exception,
+        )
+        return True
+
+    log.info(
+        "routers registered: %d",
+        len(dp.sub_routers),
+    )
+
     # Daily status scheduler (10:00 MSK)
     try:
         from app.application.jobs.daily_status_job import start_daily_status_scheduler
         start_daily_status_scheduler(bot)
-        log.info("daily digest scheduler started (10:00 MSK)")
+        log.info("daily_status scheduler started (10:00 MSK)")
     except ImportError:
         log.info("apscheduler not installed — daily digest disabled")
     except Exception as e:

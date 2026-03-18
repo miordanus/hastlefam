@@ -1,9 +1,10 @@
 from typing import Any, Awaitable, Callable, Dict
-from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
-from app.infrastructure.logging.logger import get_logger
+import logging
 
-logger = get_logger('bot')
+from aiogram import BaseMiddleware
+from aiogram.types import Message, TelegramObject
+
+log = logging.getLogger(__name__)
 
 
 class LoggingMiddleware(BaseMiddleware):
@@ -13,5 +14,15 @@ class LoggingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-        logger.info('bot.event', event_type=type(event).__name__)
+        if isinstance(event, Message):
+            user_id = event.from_user.id if event.from_user else "?"
+            text_preview = (event.text or "")[:80].replace("\n", " ")
+            log.info(
+                "msg from=%s chat=%s text=%r",
+                user_id,
+                event.chat.id if event.chat else "?",
+                text_preview,
+            )
+        else:
+            log.debug("update type=%s", type(event).__name__)
         return await handler(event, data)
