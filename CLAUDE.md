@@ -9,21 +9,26 @@ Telegram-first money copilot for a two-person household. FastAPI backend + aiogr
 ```
 app/
   api/routers/        # FastAPI routes: health, tasks, finance, reviews
-  application/        # Service layer: finance_service, jobs
+  application/
+    services/         # finance_service.py
+    jobs/             # daily_status_job.py (apscheduler, 10:00 MSK)
   bot/
-    handlers/         # capture.py, start.py, help.py
-    middlewares/      # logging middleware
-    main.py           # bot entry point (aiogram polling)
+    handlers/         # capture.py, start.py, help.py, month.py, upcoming.py,
+                      # balances.py, inbox.py, exchange_handler.py,
+                      # duplicate_handler.py, inline_actions.py, cancel.py
+    middlewares/      # logging middleware, idempotency.py (Redis dedup)
+    parsers/          # expense_parser.py — pure deterministic parser
+    main.py           # bot entry point (aiogram polling + Redis lock)
   domain/enums.py     # TransactionDirection, Currency, CategoryKind, etc.
   infrastructure/
     db/models/        # all_models.py — SQLAlchemy ORM classes
-    db/session.py     # SessionLocal (lazy-loaded engine)
+    db/session.py     # SessionLocal (lazy-loaded, @lru_cache factory)
     config/settings.py
   dashboard/          # Jinja2 HTML templates
   main.py             # FastAPI app entry point
   seeds/              # seed_areas, seed_owners, seed_finance_categories
 migrations/
-  versions/           # 0001–0004 Alembic migration scripts
+  versions/           # 0001–0009 Alembic migration scripts
   manual_apply.sql    # hand-paste into Supabase SQL editor if needed
 tests/
 ```
@@ -36,10 +41,10 @@ tests/
 |---|---|---|
 | `DATABASE_URL` | yes | `postgresql+psycopg://...` (runtime, lazy-loaded) |
 | `ALEMBIC_DATABASE_URL` | yes | same DSN used by alembic only |
-| `TELEGRAM_BOT_TOKEN` | yes | BotFather token |
+| `TELEGRAM_BOT_TOKEN` | **worker only** | BotFather token — optional for web service |
 | `OPENAI_API_KEY` | yes | used by LLM draft service |
 | `OPENAI_MODEL` | no | default `gpt-4.1-mini` |
-| `REDIS_URL` | no | default `redis://localhost:6379/0` |
+| `REDIS_URL` | no | default `redis://localhost:6379/0`; if absent, bot degrades gracefully (no lock/idempotency) |
 | `APP_ENV` | no | default `local` |
 | `LOG_LEVEL` | no | default `INFO` |
 
@@ -65,19 +70,17 @@ python -m app.bot.main
 
 ## Deployment (Railway)
 
-**Start command** (from `railway.json`):
-```
-python -m app.bot.main & uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
-```
+Two separate Railway services, each using `Procfile`:
 
-Both the bot (polling) and the API server start from the same Railway service.
-Health check hits `/health` with a 120 s timeout.
-
-`Procfile` defines the same split for platforms that support multiple process types:
 ```
 web:    uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 worker: python -m app.bot.main
 ```
+
+- `railway.json` has **no `startCommand`** — Railway falls back to Procfile per service.
+- Web service (`Web-AYHO`) runs uvicorn only; `TELEGRAM_BOT_TOKEN` is not required there.
+- Worker service (`Worker-H5P8`) runs the bot only; `PORT` is not required there.
+- Health check hits `/health` with a 120 s timeout (web service only).
 
 ---
 
@@ -98,7 +101,7 @@ If `alembic` can't reach the remote Supabase DB (e.g. from a local network), use
 
 1. Open Supabase → SQL Editor
 2. Paste `migrations/manual_apply.sql`
-3. Run — it is idempotent (all migrations 0001–0004 combined)
+3. Run — it is idempotent (all migrations 0001–0009 combined)
 
 ---
 
@@ -130,88 +133,173 @@ invalid input value for enum transaction_direction_enum: "EXPENSE"
 
 ---
 
+## Fix log — 2026-03-14
+
+### Fix 4 — Bot startup crash: missing packages in `requirements.txt` (PR #23)
+**Symptom:** Bot crashed at import with `ModuleNotFoundError: No module named 'redis'` because Railway installs from `requirements.txt`, not `pyproject.toml`.
+**Fix:** Synced `requirements.txt` with `pyproject.toml`: added `redis>=5.0`, `apscheduler>=3.10`, `psycopg-binary`. Both files are the source of truth going forward.
+**Files:** `requirements.txt`
+
+### Fix 5 — Duplicate bot instances causing TelegramConflictError (PR #23)
+**Symptom:** During Railway deployment overlap, two bot instances polled simultaneously, causing a flood of `TelegramConflictError`.
+**Fix:** Added a Redis distributed lock in `bot/main.py` — only one instance polls at a time; a second instance exits with a WARNING. Also added `IdempotencyMiddleware` (Redis key per `chat_id+message_id`, 5-min TTL) to drop duplicate Telegram update deliveries silently.
+**Files:** `app/bot/main.py`, `app/bot/middlewares/idempotency.py`
+
+### Fix 6 — Both Railway services running bot+uvicorn (PR #32)
+**Symptom:** Both Web and Worker services were executing the combined `bot & uvicorn` command (from `railway.json startCommand`), running two bot instances and silencing bot logs via backgrounding.
+**Fix:** Removed `startCommand` from `railway.json`. Railway now falls back to `Procfile`: web→uvicorn only, worker→bot only.
+**Files:** `railway.json`
+
+### Fix 7 — Web service crashing because `TELEGRAM_BOT_TOKEN` is required (PR #33)
+**Symptom:** `ValidationError` at import time on the web service where the bot token env var is absent, crashing uvicorn before it could serve any requests.
+**Fix:** Made `TELEGRAM_BOT_TOKEN` optional in `settings.py` (only the worker needs it).
+**File:** `app/infrastructure/config/settings.py`
+
+### Fix 8 — aiogram `dp.routers` AttributeError crashing bot startup (PR #26)
+**Symptom:** Bot process crashed immediately after scheduler start, before polling was reached.
+**Root cause:** aiogram 3's `Dispatcher` has no public `.routers` attribute.
+**Fix:** Removed the invalid attribute access; startup log now counts registered routers differently.
+**File:** `app/bot/main.py`
+
+### Fix 9 — FSM/capture routing conflicts (PR #27)
+**Symptom:** Users stuck in FSM states (balance editing, tag input) with no escape; all subsequent messages intercepted by state handlers, making the bot appear broken.
+**Fix:** Added `/cancel` command (registered first) to escape any active FSM state. Added `/cancel` hints to all FSM prompts. Added dedup fingerprint check before saving. Fixed direction included in dedup fingerprint so income+expense with same amount+merchant+date are not treated as duplicates.
+**Files:** `app/bot/handlers/cancel.py`, `app/bot/handlers/capture.py`, and others.
+
+---
+
 ## Telegram bot — user guide
 
 ### What the bot does
 
-The bot is a fast, friction-free expense capture tool for a two-person household. Send a plain-text message and it logs the expense instantly. No menus, no forms.
+The bot is a fast, friction-free expense capture tool for a two-person household. Send a plain-text message and it logs the expense instantly. All user-facing text is Russian.
 
 ### Getting started
 
 1. Find the bot on Telegram (ask the admin for the bot username).
-2. Send `/start` — you should see: `Money bot is online. Just send: "149 biedronka"`
+2. Send `/start` — you should see the welcome message in Russian.
 3. If you see *"User not linked. Seed users table first."* your Telegram ID hasn't been added to the `users` table yet — tell the admin your Telegram numeric user ID.
 
 ### Commands
 
 | Command | What it does |
 |---|---|
-| `/start` | Confirm the bot is alive |
-| `/help` | Show command reference |
-| `/month` | Month-to-date spend + income totals, top 3 categories, upcoming recurring till month end |
-| `/upcoming` | Recurring payments due in the next 7 days |
-| `/add <amount> <merchant>` | Explicit expense capture (useful if plain text capture doesn't trigger) |
+| `/start` | Confirm the bot is alive; show onboarding hint |
+| `/help` | Show command reference (Russian) |
+| `/month [month]` | Month-to-date spend + income per currency, top tags, inline prev/next navigation. Optional arg: `/month 2` or `/month 2026-02` |
+| `/upcoming` | All future transactions (occurred_at > today, excludes TRANSFER/EXCHANGE) |
+| `/balances` | Manual balance log: view accounts, update snapshots, add new accounts |
+| `/inbox` | Unresolved untagged transactions — quick-tag flow with inline buttons |
+| `/cancel` | Exit any active FSM state (balance edit, tag input, exchange flow, etc.) |
 
 ### Quick expense capture (no command needed)
 
-Just type the amount and merchant name separated by a space:
+Just type the amount and merchant name:
 
 ```
 149 biedronka
-49.90 netflix
-8 coffee shop
+49.90 netflix #еда
++8000 зарплата
+100 USD кофе
+200₽ аптека
+обмен 1000 USD → RUB по 90
 ```
 
 Rules:
-- Amount must be first, merchant must be at least 2 characters
+- Amount must be first; merchant must be at least 2 characters
 - Commas and dots both work as decimal separators (`49,90` = `49.90`)
-- Currency is saved as USD by default (multi-currency support is planned)
-- Duplicate detection: if the same amount + merchant is sent twice on the same day, the second message is silently dropped with `"Looks like duplicate, skipped."`
+- **Default currency is RUB** (not USD)
+- Currency can be specified inline: `100 USD кофе`, `200₽ аптека`
+- Income requires explicit `+` prefix: `+8000 зарплата`
+- Tags parsed from `#tag` syntax; `primary_tag` + `extra_tags` stored separately
+- Duplicate detection: if the same amount + merchant + direction is sent twice on the same day, user gets a **confirmation dialog** (inline buttons) instead of a silent drop
 - Confidence threshold: merchant names shorter than 3 characters are flagged low-confidence and rejected
+- Date hints accepted inline: `вчера`, `позавчера`, `DD-MM`, `DD.MM`, `DD/MM`, `YYYY-MM-DD`
+- Exchange syntax: `обмен <amount> <from_currency> → <to_currency> по <rate>` triggers FSM flow
+
+### Post-capture inline actions
+
+After each capture, relevant inline buttons appear:
+- **Дата** — correct the transaction date
+- **Тег** — add/change the tag
+- **Валюта** — change currency
 
 ### What gets saved
 
 Each captured expense creates a `Transaction` row:
-- `direction = expense`
+- `direction` — `expense` / `income` / `exchange`
 - `amount` and `currency` from the parsed text
+- `primary_tag` — first `#tag` from message
+- `extra_tags` — remaining tags (JSONB)
 - `merchant_raw` = the merchant string
 - `source = "telegram"`
 - `parse_status = "ok"`
-- `occurred_at` = UTC timestamp of the message
-- `dedup_fingerprint` = SHA-256 of `household_id|date|amount|merchant|telegram`
+- `occurred_at` = UTC timestamp (or parsed date hint)
+- `dedup_fingerprint` = SHA-256 of `household_id|date|amount|merchant|direction|telegram`
 
 ### Monthly summary (`/month`)
 
-Returns a single message with:
+Returns a message with inline prev/next navigation:
 ```
-MTD spend: 1234.50
-MTD income: 5000.00
-Top categories:
-• groceries: 320.00
-• subscriptions: 149.00
-• transport: 98.00
-Upcoming till month end:
-• 2026-03-20 Netflix 49.90 USD
-• 2026-03-28 Rent 2200.00 USD
+Март 2026
+
+Расходы: 1234.50 RUB | 49.00 USD
+Доходы: 5000.00 RUB
+Без тега: 3
+
+Топ теги:
+• продукты: 320.00 RUB
+• подписки: 49.00 USD
+• транспорт: 98.00 RUB
+
+[🏷 Разобрать (3)]  [🗓 Планы]  [💼 Балансы]
+[◀ Февраль]                    [Апрель ▶]
 ```
+
+EXCHANGE transactions are excluded from spend/income totals.
 
 ### Upcoming payments (`/upcoming`)
 
-Lists recurring payments due in the next 7 days:
+Lists all future transactions (no 7-day limit):
 ```
-Upcoming (7d):
-• 2026-03-15 | Spotify | 9.99 USD
-• 2026-03-18 | Phone plan | 35.00 USD
+Предстоящие платежи:
+• 2026-03-20 | Netflix | 49.90 USD
+• 2026-03-28 | Аренда | 2200.00 RUB
 ```
+
+### Balance log (`/balances`)
+
+Shows household accounts with latest snapshot + date. Inline actions per account:
+- **✏️ Обновить** — enter new balance; delta vs previous is shown and logged as a `balance_adjustment` transaction
+- **➕ Добавить счёт** — self-serve flow: name → currency → first balance
+
+### Inbox (`/inbox`)
+
+Untagged transactions shown one at a time:
+- Quick-tag buttons from household's top-4 existing tags
+- **✏️ Свой тег** — FSM for custom tag input
+- **⏭ Пропустить** — advance to next
+
+### Exchange flow
+
+Send `обмен 1000 USD → RUB по 90` (or similar syntax):
+- If accounts match 1:1 by currency → immediate confirm with balance note
+- If ambiguous (multiple accounts same currency) → FSM picker
+- On confirm: creates `Transaction` with `direction=exchange`, updates `BalanceSnapshot` on both accounts
+
+### Daily status job
+
+`apscheduler` fires at 10:00 MSK every day: sends a brief household summary to configured chat(s).
 
 ### Troubleshooting
 
 | Message | Cause | Fix |
 |---|---|---|
 | `User not linked. Seed users table first.` | Your Telegram numeric ID is not in `users.telegram_id` | Admin runs seeds or manually inserts your user row |
-| `Looks like duplicate, skipped.` | Same amount+merchant sent twice today | Intentional — check transactions if needed |
+| Duplicate confirmation dialog | Same amount+merchant+direction sent twice today | Confirm to save or dismiss |
 | `Not confident enough to save. Try format: 149 biedronka` | Merchant name too short | Use a longer merchant name |
-| Bot doesn't respond at all | Bot process not running | Check Railway logs; redeploy if needed |
+| Bot doesn't respond at all | Bot process not running | Check Railway Worker logs; redeploy if needed |
+| Stuck in a flow / bot ignores messages | Active FSM state | Send `/cancel` |
 
 ---
 
@@ -247,8 +335,8 @@ Rows that can't be categorized are saved with `parse_status=needs_correction`.
 
 | Enum | Values |
 |---|---|
-| `TransactionDirection` | `expense`, `income` |
-| `Currency` | `USD`, `PLN`, `EUR` |
+| `TransactionDirection` | `expense`, `income`, `exchange` |
+| `Currency` | `USD`, `PLN`, `EUR`, `RUB` |
 | `CategoryKind` | `expense`, `income`, `transfer` |
 | `TaskStatus` | `backlog`, `todo`, `in_progress`, `done`, `cancelled` |
 | `TaskType` | `task`, `chore`, `project` |
@@ -276,7 +364,7 @@ pytest
 pytest --tb=short -q
 ```
 
-Test suite covers: finance service, import pipeline, dedup fingerprint logic, API health endpoint.
+Test suite covers: finance service (including EXCHANGE exclusion, untagged counts), import pipeline, dedup fingerprint logic, API health endpoint, expense parser (21 parser tests).
 
 ---
 
@@ -285,5 +373,8 @@ Test suite covers: finance service, import pipeline, dedup fingerprint logic, AP
 - **No LLM for core finance logic** — categorization is rule-based; LLM drafts are a separate optional layer.
 - **No bank integrations** — SQL import is the only ingest path.
 - **No goals/forecasting** — out of scope for this MVP.
-- **Two-process deployment** — bot (polling) and API run in the same Railway service via `&`.
+- **Strict two-service deployment** — web (uvicorn) and worker (bot) are separate Railway services via Procfile; `railway.json` has no `startCommand`.
 - **Supabase enums are lowercase** — always use `values_callable=_enum_values` on any new `Enum()` column.
+- **Default currency is RUB** — not USD; multi-currency is supported inline.
+- **Redis is optional** — bot starts and polls without it; distributed lock and idempotency middleware degrade gracefully.
+- **EXCHANGE excluded from financial totals** — `/month` spend/income never includes exchange transactions.
