@@ -69,6 +69,15 @@ async def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
 
+    if not settings.telegram_bot_token:
+        log.error(
+            "TELEGRAM_BOT_TOKEN is not set — bot worker cannot start. "
+            "This process belongs to the Worker service only. "
+            "If you see this on the Web service, remove TELEGRAM_BOT_TOKEN "
+            "from its env vars or fix the start command."
+        )
+        return
+
     redis_client, lock = await _setup_redis(settings.redis_url)
 
     # If lock is held by another instance, exit cleanly
