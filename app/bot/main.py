@@ -27,6 +27,25 @@ _POLLER_LOCK_KEY = "hastlefam:bot:poller"
 _POLLER_LOCK_TTL = 60  # seconds
 _LOCK_RENEW_INTERVAL = 20  # seconds
 
+# Global refs so _ConflictExitSession can release the lock before os._exit
+_global_lock = None
+_global_redis = None
+
+
+async def _release_global_lock():
+    """Best-effort lock release before os._exit."""
+    global _global_lock, _global_redis
+    try:
+        if _global_lock:
+            await _global_lock.release()
+    except Exception:
+        pass
+    try:
+        if _global_redis and _global_redis != "exit":
+            await _global_redis.aclose()
+    except Exception:
+        pass
+
 
 class _ConflictExitSession(AiohttpSession):
     """Bot session that exits immediately on TelegramConflictError.
@@ -46,6 +65,9 @@ class _ConflictExitSession(AiohttpSession):
                 "TelegramConflictError: another instance is polling. "
                 "Exiting so Railway restarts this instance after the conflict clears."
             )
+            # Release Redis lock before exiting so the next instance can start immediately
+            # instead of waiting for lock TTL (60s) to expire.
+            await _release_global_lock()
             os._exit(1)
 
 
@@ -108,6 +130,11 @@ async def main() -> None:
     # If lock is held by another instance, exit cleanly
     if redis_client == "exit":
         return
+
+    # Store globally so _ConflictExitSession can release before os._exit
+    global _global_lock, _global_redis
+    _global_lock = lock
+    _global_redis = redis_client
 
     bot = Bot(token=settings.telegram_bot_token, session=_ConflictExitSession())
     dp = Dispatcher()
