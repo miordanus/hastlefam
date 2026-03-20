@@ -2,12 +2,11 @@ import uuid
 from sqlalchemy import text
 from app.infrastructure.db.session import SessionLocal
 from app.infrastructure.db.base import DB_SCHEMA
-from app.seeds import seed_areas, seed_finance_categories, seed_owners
+from app.seeds import seed_areas, seed_finance_categories, seed_owners, seed_users
 
 
 def main():
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         household_id = db.execute(text(f'SELECT id FROM {DB_SCHEMA}.households ORDER BY created_at LIMIT 1')).scalar()
         if household_id is None:
             household_id = uuid.uuid4()
@@ -18,8 +17,7 @@ def main():
         seed_areas.run(db, household_id)
         seed_finance_categories.run(db, household_id)
         seed_owners.run(db, household_id)
-    finally:
-        db.close()
+        seed_users.run(db, household_id)
 
 
 if __name__ == '__main__':
