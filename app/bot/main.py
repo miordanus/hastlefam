@@ -17,6 +17,8 @@ from app.bot.handlers.inline_actions import router as inline_actions_router
 from app.bot.handlers.duplicate_handler import router as duplicate_router
 from app.bot.handlers.inbox import router as inbox_router
 from app.bot.handlers.balances import router as balances_router
+from app.bot.handlers.rules import router as rules_router
+from app.bot.handlers.ask import router as ask_router
 from app.bot.middlewares.logging import LoggingMiddleware
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.logging.logger import configure_logging
@@ -159,6 +161,8 @@ async def main() -> None:
     dp.include_router(duplicate_router)
     dp.include_router(inbox_router)
     dp.include_router(balances_router)
+    dp.include_router(rules_router)
+    dp.include_router(ask_router)
     dp.include_router(capture_router)
 
     # Catch-all error handler — log every unhandled exception from any handler

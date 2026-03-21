@@ -123,6 +123,15 @@ async def _capture_text(message: Message, text: str) -> None:
             from app.application.services.finance_service import FinanceService
             default_account = FinanceService(db).get_or_create_default_account(str(user.household_id))
 
+            # Auto-categorization: if no tag from user, check merchant rules
+            effective_tag = result.primary_tag
+            autocat_applied = False
+            if not effective_tag and result.merchant:
+                from app.application.services.autocat_service import lookup_tag
+                effective_tag = lookup_tag(db, user.household_id, result.merchant)
+                if effective_tag:
+                    autocat_applied = True
+
             tx = Transaction(
                 id=uuid.uuid4(),
                 household_id=user.household_id,
@@ -138,10 +147,16 @@ async def _capture_text(message: Message, text: str) -> None:
                 parse_status="ok",
                 parse_confidence=Decimal("0.930"),
                 dedup_fingerprint=fingerprint,
-                primary_tag=result.primary_tag,
+                primary_tag=effective_tag,
                 extra_tags=result.extra_tags or [],
             )
             db.add(tx)
+
+            # Auto-learn: if user provided a tag, try to create a rule
+            if result.primary_tag and result.merchant:
+                from app.application.services.autocat_service import learn_from_transaction
+                learn_from_transaction(db, user.household_id, result.merchant, result.primary_tag)
+
             db.commit()
             tx_id = str(tx.id)
 
@@ -152,7 +167,7 @@ async def _capture_text(message: Message, text: str) -> None:
 
     keyboard = build_post_capture_keyboard(
         tx_id=tx_id,
-        tag_missing=result.primary_tag is None,
+        tag_missing=effective_tag is None,
         date_explicit=result.date_explicit,
         currency_explicit=result.currency_explicit,
     )
@@ -160,8 +175,9 @@ async def _capture_text(message: Message, text: str) -> None:
     from app.domain.enums import TransactionDirection as TD
     direction_label = " (доход)" if result.direction == TD.INCOME else ""
 
-    if result.primary_tag:
-        body = f"✅ Записал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant} · {result.primary_tag}"
+    if effective_tag:
+        auto_hint = " 🤖" if autocat_applied else ""
+        body = f"✅ Записал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant} · #{effective_tag}{auto_hint}"
     else:
         body = f"✅ Записал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant}"
 

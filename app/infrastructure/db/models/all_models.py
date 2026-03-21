@@ -330,6 +330,23 @@ class EventLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class MerchantTagRule(Base):
+    """Auto-categorization rule: merchant pattern -> tag. Per household."""
+    __tablename__ = "merchant_tag_rules"
+    __table_args__ = (
+        Index("ix_merchant_tag_rules_household_merchant", "household_id", "merchant_pattern", unique=True),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    merchant_pattern: Mapped[str] = mapped_column(String(255), nullable=False)
+    tag: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="auto")
+    hit_count: Mapped[int] = mapped_column(default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
 class FxRate(Base):
     """Daily FX rate snapshot fetched from exchangerate-api.com."""
     __tablename__ = "fx_rates"
