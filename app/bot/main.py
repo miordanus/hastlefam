@@ -101,9 +101,10 @@ async def _setup_redis(redis_url: str):
         client = aioredis.from_url(redis_url, decode_responses=True)
         await client.ping()
         lock = client.lock(_POLLER_LOCK_KEY, timeout=_POLLER_LOCK_TTL)
-        acquired = await lock.acquire(blocking=False)
+        log.info("acquiring poller lock (will wait up to 70s for stale lock to expire)…")
+        acquired = await lock.acquire(blocking=True, blocking_timeout=70)
         if not acquired:
-            log.warning("poller lock held by another instance — exiting without polling")
+            log.warning("poller lock held by another instance after 70s — exiting without polling")
             await client.aclose()
             return "exit", None  # sentinel: caller should exit
         log.info("poller lock acquired")
