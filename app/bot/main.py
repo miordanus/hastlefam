@@ -182,6 +182,13 @@ async def main() -> None:
     except Exception as e:
         log.error("daily digest scheduler failed to start: %s", e, exc_info=True)
 
+    # Fetch FX rates on startup so they're available immediately
+    try:
+        from app.application.services.fx_service import fetch_and_store_rates
+        await fetch_and_store_rates()
+    except Exception as e:
+        log.warning("startup FX rate fetch failed: %s", e)
+
     log.info("starting polling")
 
     renew_task = asyncio.create_task(_renew_lock(lock)) if lock else None

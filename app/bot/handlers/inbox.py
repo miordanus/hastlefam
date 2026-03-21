@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 _CB_TAG = "inbox:tag:"       # inbox:tag:{tx_id}:{tag}
 _CB_SKIP = "inbox:skip:"     # inbox:skip:{tx_id}
 _CB_CUSTOM = "inbox:custom:" # inbox:custom:{tx_id}
+_CB_DELETE = "inbox:del:"    # inbox:del:{tx_id}
 
 
 class InboxStates(StatesGroup):
@@ -76,8 +77,9 @@ def _build_inbox_keyboard(tx_id: str, top_tags: list[str]) -> InlineKeyboardMark
     for i in range(0, len(tag_buttons), 2):
         rows.append(tag_buttons[i:i + 2])
     rows.append([
-        InlineKeyboardButton(text="✏️ Свой тег", callback_data=f"{_CB_CUSTOM}{tx_id}"),
-        InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"{_CB_SKIP}{tx_id}"),
+        InlineKeyboardButton(text="\u270f\ufe0f \u0421\u0432\u043e\u0439", callback_data=f"{_CB_CUSTOM}{tx_id}"),
+        InlineKeyboardButton(text="\u23ed \u0421\u043a\u0438\u043f", callback_data=f"{_CB_SKIP}{tx_id}"),
+        InlineKeyboardButton(text="\U0001f5d1 \u0423\u0434\u0430\u043b\u0438\u0442\u044c", callback_data=f"{_CB_DELETE}{tx_id}"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -166,6 +168,25 @@ async def on_inbox_skip(callback: CallbackQuery) -> None:
         keyboard = _build_inbox_keyboard(str(tx.id), top_tags)
 
     await callback.message.edit_text(text, reply_markup=keyboard)
+
+
+# ─── Delete ───────────────────────────────────────────────────────────────────
+
+@router.callback_query(lambda c: c.data and c.data.startswith(_CB_DELETE))
+async def on_inbox_delete(callback: CallbackQuery) -> None:
+    await callback.answer()
+    tx_id = callback.data[len(_CB_DELETE):]
+
+    try:
+        with SessionLocal() as db:
+            tx = db.query(Transaction).filter(Transaction.id == uuid.UUID(tx_id)).first()
+            if tx:
+                db.delete(tx)
+                db.commit()
+    except Exception as e:
+        log.error("inbox: failed to delete tx=%s: %s", tx_id, e)
+
+    await _show_next(callback, str(callback.from_user.id))
 
 
 # ─── Custom tag input ──────────────────────────────────────────────────────────

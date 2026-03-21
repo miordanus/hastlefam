@@ -91,14 +91,29 @@ def _format_accounts(accounts: list[Account], snapshots: dict[uuid.UUID, Balance
     return "\n".join(lines)
 
 
+_CUR_SYMBOL = {"RUB": "\u20bd", "USD": "$", "EUR": "\u20ac", "PLN": "z\u0142", "USDT": "\u20ae"}
+
+
+def _cur_sym(currency: str) -> str:
+    return _CUR_SYMBOL.get(currency, currency)
+
+
 def _build_accounts_keyboard(accounts: list[Account]) -> InlineKeyboardMarkup:
     rows = []
+    # Pack accounts 2 per row for compact layout
+    row: list[InlineKeyboardButton] = []
     for acc in accounts:
-        rows.append([InlineKeyboardButton(
-            text=f"✏️ {acc.name}",
+        sym = _cur_sym(acc.currency.value)
+        row.append(InlineKeyboardButton(
+            text=f"{acc.name} {sym}",
             callback_data=f"{_CB_UPDATE}{acc.id}",
-        )])
-    rows.append([InlineKeyboardButton(text="➕ Добавить счёт", callback_data=_CB_ADD)])
+        ))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="+ \u0421\u0447\u0451\u0442", callback_data=_CB_ADD)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -240,7 +255,8 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
                     occurred_at=datetime.now(tz.utc),
                     merchant_raw=f"Корректировка: {acc.name}",
                     source="telegram",
-                    parse_status="needs_correction",
+                    parse_status="ok",
+                    primary_tag="корректировка",
                     extra_tags=[],
                 )
                 db.add(tx)
