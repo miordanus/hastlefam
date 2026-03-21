@@ -25,14 +25,15 @@ class FinanceService:
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
 
         month_start_dt = datetime(month_start.year, month_start.month, month_start.day, tzinfo=timezone.utc)
-        today_end_dt = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
+        # Use full calendar month end so past-month navigation shows all data
+        month_end_dt = datetime(month_end.year, month_end.month, month_end.day, 23, 59, 59, tzinfo=timezone.utc)
 
         rows = (
             self.db.query(Transaction)
             .filter(
                 Transaction.household_id == hid,
                 Transaction.occurred_at >= month_start_dt,
-                Transaction.occurred_at <= today_end_dt,
+                Transaction.occurred_at <= month_end_dt,
                 Transaction.direction != TransactionDirection.TRANSFER,
             )
             .all()
@@ -44,6 +45,8 @@ class FinanceService:
         # by_tag: {tag: {currency: amount}}
         by_tag: dict[str, dict[str, Decimal]] = {}
         untagged_count = 0
+        expense_count = 0
+        income_count = 0
 
         for tx in rows:
             if tx.direction == TransactionDirection.EXCHANGE:
@@ -53,6 +56,7 @@ class FinanceService:
             cur = tx.currency.value if tx.currency else "RUB"
 
             if tx.direction == TransactionDirection.EXPENSE:
+                expense_count += 1
                 spend_by_currency[cur] = spend_by_currency.get(cur, Decimal("0")) + amount
                 if tx.primary_tag:
                     tag_currencies = by_tag.setdefault(tx.primary_tag, {})
@@ -60,6 +64,7 @@ class FinanceService:
                 else:
                     untagged_count += 1
             elif tx.direction == TransactionDirection.INCOME:
+                income_count += 1
                 income_by_currency[cur] = income_by_currency.get(cur, Decimal("0")) + amount
 
         # Sort tags by total amount across all currencies
@@ -79,6 +84,8 @@ class FinanceService:
             "top_tags": top_tags,
             "upcoming_until_month_end": upcoming,
             "untagged_count": untagged_count,
+            "expense_count": expense_count,
+            "income_count": income_count,
             # Legacy keys kept for existing API routes
             "totals": {
                 "spend_mtd": sum(spend_by_currency.values(), Decimal("0")),
