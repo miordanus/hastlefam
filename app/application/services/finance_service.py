@@ -357,13 +357,70 @@ class FinanceService:
                     occurred_at=datetime.now(timezone.utc),
                     merchant_raw=f"Корректировка: {acc.name}",
                     source="telegram",
-                    parse_status="needs_correction",
+                    parse_status="ok",
+                    primary_tag="корректировка",
                     extra_tags=[],
                 )
                 self.db.add(delta_tx)
 
         self.db.commit()
         return snapshot, delta_tx
+
+    # ─── Balance summary for /month ──────────────────────────────────────────
+
+    def balance_summary(self, household_id: str, for_date: date | None = None) -> dict[str, Any]:
+        """Return per-account balance info: latest snapshot and start-of-month snapshot."""
+        today = for_date or datetime.now(timezone.utc).date()
+        month_start = today.replace(day=1)
+        month_start_dt = datetime(month_start.year, month_start.month, month_start.day, tzinfo=timezone.utc)
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+        accounts = (
+            self.db.query(Account)
+            .filter(Account.household_id == hid, Account.is_active.is_(True))
+            .order_by(Account.created_at.asc())
+            .all()
+        )
+        if not accounts:
+            return {"accounts": [], "total_by_currency": {}}
+
+        result = []
+        total_by_currency: dict[str, Decimal] = {}
+        for acc in accounts:
+            # Latest snapshot (current balance)
+            latest = (
+                self.db.query(BalanceSnapshot)
+                .filter(BalanceSnapshot.account_id == acc.id)
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            # Snapshot closest to month start (for delta)
+            month_start_snap = (
+                self.db.query(BalanceSnapshot)
+                .filter(
+                    BalanceSnapshot.account_id == acc.id,
+                    BalanceSnapshot.created_at < month_start_dt,
+                )
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+
+            cur = acc.currency.value
+            current_bal = Decimal(str(latest.actual_balance)) if latest else None
+            start_bal = Decimal(str(month_start_snap.actual_balance)) if month_start_snap else None
+
+            if current_bal is not None:
+                total_by_currency[cur] = total_by_currency.get(cur, Decimal("0")) + current_bal
+
+            result.append({
+                "name": acc.name,
+                "currency": cur,
+                "current_balance": current_bal,
+                "month_start_balance": start_bal,
+                "delta": (current_bal - start_bal) if current_bal is not None and start_bal is not None else None,
+            })
+
+        return {"accounts": result, "total_by_currency": total_by_currency}
 
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 
