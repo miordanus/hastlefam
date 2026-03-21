@@ -10,12 +10,15 @@ Telegram-first money copilot for a two-person household. FastAPI backend + aiogr
 app/
   api/routers/        # FastAPI routes: health, tasks, finance, reviews
   application/
-    services/         # finance_service.py
+    services/         # finance_service.py, fx_service.py, autocat_service.py,
+                      # insights_service.py, ask_service.py, import_service.py,
+                      # llm_service.py, users_service.py, tasks_service.py
     jobs/             # daily_status_job.py (apscheduler, 10:00 MSK)
   bot/
     handlers/         # capture.py, start.py, help.py, month.py, upcoming.py,
                       # balances.py, inbox.py, exchange_handler.py,
-                      # duplicate_handler.py, inline_actions.py, cancel.py
+                      # duplicate_handler.py, inline_actions.py, cancel.py,
+                      # ask.py, rules.py
     middlewares/      # logging middleware, idempotency.py (Redis dedup)
     parsers/          # expense_parser.py — pure deterministic parser
     main.py           # bot entry point (aiogram polling + Redis lock)
@@ -28,7 +31,7 @@ app/
   main.py             # FastAPI app entry point
   seeds/              # seed_areas, seed_owners, seed_finance_categories
 migrations/
-  versions/           # 0001–0009 Alembic migration scripts
+  versions/           # 0001–0010+ Alembic migration scripts
   manual_apply.sql    # hand-paste into Supabase SQL editor if needed
 tests/
 ```
@@ -101,7 +104,7 @@ If `alembic` can't reach the remote Supabase DB (e.g. from a local network), use
 
 1. Open Supabase → SQL Editor
 2. Paste `migrations/manual_apply.sql`
-3. Run — it is idempotent (all migrations 0001–0009 combined)
+3. Run — it is idempotent (all migrations combined)
 
 ---
 
@@ -168,6 +171,45 @@ invalid input value for enum transaction_direction_enum: "EXPENSE"
 
 ---
 
+## Fix log — 2026-03-15 to 2026-03-21
+
+### Fix 10 — `bot/main.py` exits cleanly when `TELEGRAM_BOT_TOKEN` is not set (PR #35)
+**Symptom:** Worker service would crash with a confusing traceback if run without a bot token.
+**Fix:** Added an early guard in `bot/main.py` — exits with a clear WARNING if `TELEGRAM_BOT_TOKEN` is absent.
+**File:** `app/bot/main.py`
+
+### Fix 11 — Handler visibility, connection pool, error logging (PR #35)
+**Symptom:** Some handlers were not responding; database connection pool exhausted under load; errors swallowed silently.
+**Fix:** Re-registered all routers explicitly; tuned SQLAlchemy pool settings; added structured error logging.
+**Files:** `app/bot/main.py`, `app/infrastructure/db/session.py`
+
+### Fix 12 — `TelegramConflictError` — immediate exit + Redis lock released first (PR #37, #39)
+**Symptom:** On Railway deployment overlap, `TelegramConflictError` flooded logs; old instance held Redis lock for full TTL (60 s) before releasing, delaying restart.
+**Fix:** Bot now calls `_release_global_lock()` (best-effort Redis lock release) immediately before `os._exit(1)` on conflict. Suppressed APScheduler noise in logs.
+**File:** `app/bot/main.py`
+
+### Fix 13 — Railway healthcheck killing Worker service (PR #38)
+**Symptom:** Railway's healthcheck (configured in `railway.json`) was probing the Worker service, which has no HTTP port, and marking it unhealthy → restart loop.
+**Fix:** Removed the healthcheck entry from `railway.json` entirely. Healthcheck only applies to the web service via Procfile/Railway UI.
+**File:** `railway.json`
+
+### Fix 14 — Broken seed runner + missing user seeding (PR #40)
+**Symptom:** `python -m app.seeds.run_all` crashed; user rows were not seeded, causing "User not linked" errors on first bot use.
+**Fix:** Fixed seed runner import order and added explicit user seeding step.
+**Files:** `app/seeds/`
+
+### Fix 15 — `httpx` missing from `requirements.txt` (PR #41)
+**Symptom:** Bot crashed at import with `ModuleNotFoundError: No module named 'httpx'` because `httpx` (needed by `fx_service.py`) was not in `requirements.txt`.
+**Fix:** Added `httpx>=0.27` to `requirements.txt`.
+**File:** `requirements.txt`
+
+### Fix 16 — Stale Redis poller lock — wait up to 70 s instead of exiting (PR #44)
+**Symptom:** On Railway cold start, if a previous instance's lock hadn't expired yet (TTL 60 s), the new instance exited immediately with "lock not acquired", leaving the bot silent until the next restart.
+**Fix:** Changed `lock.acquire()` to `blocking=True, blocking_timeout=70` — the new instance waits up to 70 s for the stale lock to expire before giving up.
+**File:** `app/bot/main.py`
+
+---
+
 ## Telegram bot — user guide
 
 ### What the bot does
@@ -189,7 +231,9 @@ The bot is a fast, friction-free expense capture tool for a two-person household
 | `/month [month]` | Month-to-date spend + income per currency, top tags, inline prev/next navigation. Optional arg: `/month 2` or `/month 2026-02` |
 | `/upcoming` | All future transactions (occurred_at > today, excludes TRANSFER/EXCHANGE) |
 | `/balances` | Manual balance log: view accounts, update snapshots, add new accounts |
-| `/inbox` | Unresolved untagged transactions — quick-tag flow with inline buttons |
+| `/inbox` | Unresolved untagged transactions — quick-tag + delete flow with inline buttons |
+| `/ask <question>` | Natural-language finance query answered by OpenAI (Russian) |
+| `/rules` | List, add, or delete auto-categorization merchant→tag rules |
 | `/cancel` | Exit any active FSM state (balance edit, tag input, exchange flow, etc.) |
 
 ### Quick expense capture (no command needed)
@@ -243,20 +287,22 @@ Returns a message with inline prev/next navigation:
 ```
 Март 2026
 
-Расходы: 1234.50 RUB | 49.00 USD
-Доходы: 5000.00 RUB
+Расходы: 1 234 ₽ | 49 $
+Доходы: 5 000 ₽
 Без тега: 3
 
 Топ теги:
-• продукты: 320.00 RUB
-• подписки: 49.00 USD
-• транспорт: 98.00 RUB
+• продукты: 320 ₽
+• подписки: 49 $
+• транспорт: 98 ₽
 
-[🏷 Разобрать (3)]  [🗓 Планы]  [💼 Балансы]
-[◀ Февраль]                    [Апрель ▶]
+[🏷 Разобрать (3)]  [💡 Инсайты]  [💼 Балансы]
+[◀ Февраль]                        [Апрель ▶]
 ```
 
-EXCHANGE transactions are excluded from spend/income totals.
+- EXCHANGE transactions are excluded from spend/income totals.
+- **💡 Инсайты** button calls `insights_service.py` — OpenAI generates MoM comparisons, anomaly callouts, and actionable recommendations in Russian.
+- Amounts formatted with space thousands separator and currency symbol.
 
 ### Upcoming payments (`/upcoming`)
 
@@ -270,7 +316,7 @@ Lists all future transactions (no 7-day limit):
 ### Balance log (`/balances`)
 
 Shows household accounts with latest snapshot + date. Inline actions per account:
-- **✏️ Обновить** — enter new balance; delta vs previous is shown and logged as a `balance_adjustment` transaction
+- **✏️ Обновить** — enter new balance; delta vs previous is shown (converted to RUB using FX rates) and logged as a `balance_adjustment` transaction
 - **➕ Добавить счёт** — self-serve flow: name → currency → first balance
 
 ### Inbox (`/inbox`)
@@ -279,6 +325,18 @@ Untagged transactions shown one at a time:
 - Quick-tag buttons from household's top-4 existing tags
 - **✏️ Свой тег** — FSM for custom tag input
 - **⏭ Пропустить** — advance to next
+- **🗑 Удалить** — permanently delete the transaction
+
+### Natural-language queries (`/ask`)
+
+`/ask сколько потратил на кафе за 3 месяца?` — sends a structured prompt with relevant finance data to OpenAI and returns an answer in Russian. Degrades gracefully if OpenAI is unavailable.
+
+### Auto-categorization rules (`/rules`)
+
+Rules map merchant patterns to tags (case-insensitive, per-household):
+- **Auto-learn:** when the same merchant is tagged identically 3+ times, a rule is created automatically.
+- **Manual:** `/rules кофейня кафе` — create/update rule; `/rules удалить кофейня` — delete.
+- `/rules` with no args lists all active rules with source (`🤖` auto / `✏️` manual) and hit count.
 
 ### Exchange flow
 
@@ -287,9 +345,13 @@ Send `обмен 1000 USD → RUB по 90` (or similar syntax):
 - If ambiguous (multiple accounts same currency) → FSM picker
 - On confirm: creates `Transaction` with `direction=exchange`, updates `BalanceSnapshot` on both accounts
 
+### FX rates
+
+`fx_service.py` fetches daily rates from the Central Bank of Russia (CBR XML feed) for USD, EUR, PLN → RUB. Rates are stored in the `fx_rates` table. `convert_to_rub()` is used by `/balances` and `/month` for cross-currency totals. No API key required. Degrades gracefully on network failure.
+
 ### Daily status job
 
-`apscheduler` fires at 10:00 MSK every day: sends a brief household summary to configured chat(s).
+`apscheduler` fires at 10:00 MSK every day: sends a brief household summary to configured chat(s). Also triggers `fetch_and_store_rates()` to refresh FX data.
 
 ### Troubleshooting
 
@@ -370,11 +432,14 @@ Test suite covers: finance service (including EXCHANGE exclusion, untagged count
 
 ## Key decisions / constraints
 
-- **No LLM for core finance logic** — categorization is rule-based; LLM drafts are a separate optional layer.
+- **No LLM for core finance logic** — categorization is rule-based via `autocat_service.py`; LLM is used only for insights (`insights_service.py`) and `/ask` queries.
 - **No bank integrations** — SQL import is the only ingest path.
 - **No goals/forecasting** — out of scope for this MVP.
-- **Strict two-service deployment** — web (uvicorn) and worker (bot) are separate Railway services via Procfile; `railway.json` has no `startCommand`.
+- **Strict two-service deployment** — web (uvicorn) and worker (bot) are separate Railway services via Procfile; `railway.json` has no `startCommand` and no healthcheck entry.
 - **Supabase enums are lowercase** — always use `values_callable=_enum_values` on any new `Enum()` column.
 - **Default currency is RUB** — not USD; multi-currency is supported inline.
-- **Redis is optional** — bot starts and polls without it; distributed lock and idempotency middleware degrade gracefully.
+- **Redis is optional** — bot starts and polls without it; distributed lock and idempotency middleware degrade gracefully. Lock is released before `os._exit` on `TelegramConflictError`.
+- **Redis lock blocks on startup** — new bot instance waits up to 70 s for a stale lock to expire (`blocking_timeout=70`) rather than exiting immediately.
 - **EXCHANGE excluded from financial totals** — `/month` spend/income never includes exchange transactions.
+- **FX rates from CBR** — daily XML feed, no API key, stored in `fx_rates` table; used for RUB conversions in balances and monthly totals.
+- **Auto-cat rules** — `MerchantTagRule` table, per-household, auto-learned at threshold=3 tags, also manually manageable via `/rules`.
