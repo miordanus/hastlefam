@@ -1,7 +1,6 @@
 """
 month.py — /month command handler.
-Shows MTD spend, income, planned, top tags, balances, and unresolved items.
-Untagged items are shown separately and linked to /inbox via inline button.
+Shows MTD spend, income, planned, top tags, and unresolved items.
 Supports: /month, /month 2, /month 2026-02, and prev/next navigation buttons.
 """
 from __future__ import annotations
@@ -15,9 +14,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.services.finance_service import FinanceService
-from app.application.services.fx_service import convert_to_rub
-from app.domain.enums import DebtDirection
-from app.infrastructure.db.models import Debt, User
+from app.infrastructure.db.models import User
 from app.infrastructure.db.session import SessionLocal
 
 router = Router()
@@ -37,12 +34,6 @@ def _cur_sym(currency: str) -> str:
 
 def _find_user(db, telegram_id: str):
     return db.query(User).filter(User.telegram_id == telegram_id, User.is_active.is_(True)).first()
-
-
-def _format_currency_block(by_currency: dict[str, Decimal]) -> str:
-    if not by_currency:
-        return "  0 \u20bd"
-    return "\n".join(f"  {_fmt_amount(v)} {_cur_sym(cur)}" for cur, v in by_currency.items())
 
 
 def _fmt_amount(v: Decimal) -> str:
@@ -95,27 +86,28 @@ def _next_month(d: date) -> date:
 
 
 def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboardMarkup:
-    rows = []
+    from app.infrastructure.config.settings import get_settings
+    settings = get_settings()
 
-    # Row 1: Инсайты | Бюджеты
-    rows.append([
-        InlineKeyboardButton(
+    rows: list[list[InlineKeyboardButton]] = []
+
+    # Row 1: action buttons
+    row1: list[InlineKeyboardButton] = []
+    if settings.insights_enabled:
+        row1.append(InlineKeyboardButton(
             text="💡 Инсайты",
             callback_data=f"month:insights:{for_date.isoformat()}",
-        ),
-        InlineKeyboardButton(text="📊 Бюджеты", callback_data="month:open_budgets"),
-    ])
-
-    # Row 2: План | Разобрать (untagged)
-    row2 = [InlineKeyboardButton(text="📅 План", callback_data="month:open_upcoming")]
+        ))
+    row1.append(InlineKeyboardButton(text="📊 Бюджеты", callback_data="month:open_budgets"))
+    row1.append(InlineKeyboardButton(text="📅 План", callback_data="month:open_upcoming"))
     if untagged_count > 0:
-        row2.append(InlineKeyboardButton(
+        row1.append(InlineKeyboardButton(
             text=f"🏷 Разобрать ({untagged_count})",
             callback_data="month:open_inbox",
         ))
-    rows.append(row2)
+    rows.append(row1)
 
-    # Navigation: < prev month | next month >
+    # Row 2: navigation
     prev_d = _prev_month(for_date)
     next_d = _next_month(for_date)
     rows.append([
@@ -132,298 +124,132 @@ def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboard
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _ascii_bar(value: Decimal, max_value: Decimal, width: int = 10) -> str:
-    """Return an ASCII bar like '████░░░░░░' proportional to value/max_value."""
-    if max_value <= 0:
-        return "░" * width
-    filled = int(round(float(value / max_value) * width))
-    filled = max(0, min(filled, width))
-    return "█" * filled + "░" * (width - filled)
-
-
-def _tag_list(tags: list, prev_tags: list, spend_total: Decimal) -> str:
-    """Build tag list with ASCII bars and MoM dynamics (Факт only: is_planned=False)."""
-    if not tags:
-        return ""
-    prev_map = {t["tag"]: t["amount"] for t in prev_tags}
-    max_amt = max((t["amount"] for t in tags[:5]), default=Decimal("0"))
-    lines = []
-    for t in tags[:5]:
-        tag = t["tag"]
-        amt = t["amount"]
-        amt_str = _fmt_amount(amt)
-        bar = _ascii_bar(amt, max_amt)
-        # Dynamics vs previous month
-        prev_amt = prev_map.get(tag)
-        if prev_amt is None:
-            dyn = "  new"
-        elif prev_amt > 0:
-            change_pct = (amt - prev_amt) / prev_amt * 100
-            if change_pct >= 1:
-                dyn = f"  ▲ +{change_pct:.0f}%"
-            elif change_pct <= -1:
-                dyn = f"  ▼ {change_pct:.0f}%"
-            else:
-                dyn = ""
-        else:
-            dyn = ""
-        lines.append(f"{tag}  {bar}  {amt_str}{dyn}")
-    return "\n".join(lines)
-
-
-def _compute_grand_total_rub(
-    by_currency: dict[str, Decimal],
-    for_date: date,
-    db,
-) -> str | None:
-    """Return a formatted grand-total RUB string, or unavailable note."""
-    if not by_currency:
-        return None
-    # If only RUB, no need for conversion line
-    if list(by_currency.keys()) == ["RUB"]:
-        return None
-    total = Decimal("0")
-    unavailable = False
-    for cur, amt in by_currency.items():
-        converted = convert_to_rub(amt, cur, for_date, db)
-        if converted is None:
-            unavailable = True
-        else:
-            total += converted
-    if unavailable:
-        return "\u2248 ~ \u20bd (\u043a\u0443\u0440\u0441 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d)"
-    return f"\u2248 {_fmt_amount(total)} \u20bd"
-
-
-def _format_planned_total(planned: list, for_date: date, db) -> str:
-    """Compute planned payments total as currency summary + RUB equivalent."""
-    if not planned:
-        return ""
-    by_cur: dict[str, Decimal] = {}
-    for x in planned:
-        cur = x["currency"]
-        by_cur[cur] = by_cur.get(cur, Decimal("0")) + Decimal(str(x["amount"]))
-
-    parts = [f"{_fmt_amount(amt)} {_cur_sym(cur)}" for cur, amt in by_cur.items()]
-    line = "  \u0418\u0442\u043e\u0433\u043e: " + ", ".join(parts)
-
-    # Add RUB equivalent if multi-currency
-    if len(by_cur) > 1 or "RUB" not in by_cur:
-        total_rub = Decimal("0")
-        ok = True
-        for cur, amt in by_cur.items():
-            converted = convert_to_rub(amt, cur, for_date, db)
-            if converted is None:
-                ok = False
-            else:
-                total_rub += converted
-        if ok:
-            line += f" \u2248 {_fmt_amount(total_rub)} \u20bd"
-
-    return line
-
-
-def _build_debts_block(household_id: str, for_date: date, db) -> str:
-    """Build debts summary line for /month: 'Долги: тебе должны +X / ты должен -Y'."""
-    try:
-        import uuid as _uuid
-        hid = _uuid.UUID(household_id)
-        open_debts = (
-            db.query(Debt)
-            .filter(Debt.household_id == hid, Debt.settled_at.is_(None))
-            .all()
-        )
-        if not open_debts:
-            return ""
-
-        they_owe_rub = Decimal("0")
-        i_owe_rub = Decimal("0")
-
-        for d in open_debts:
-            amount_rub = convert_to_rub(Decimal(str(d.amount)), d.currency, for_date, db)
-            if amount_rub is None:
-                amount_rub = Decimal(str(d.amount))  # fallback: use as-is
-
-            if d.direction == DebtDirection.THEY_OWE:
-                they_owe_rub += amount_rub
-            else:
-                i_owe_rub += amount_rub
-
-        parts = []
-        if they_owe_rub > 0:
-            parts.append(f"тебе должны +{_fmt_amount(they_owe_rub)} ₽")
-        if i_owe_rub > 0:
-            parts.append(f"ты должен −{_fmt_amount(i_owe_rub)} ₽")
-
-        if not parts:
-            return ""
-        return "💸 Долги: " + " / ".join(parts)
-    except Exception:
-        return ""
-
-
-def _render_balance_section(balance_summary: dict, for_date: date, db) -> str:
-    """Render balance net worth + per-account deltas for /month."""
-    accounts = balance_summary.get("accounts", [])
-    total_by_currency = balance_summary.get("total_by_currency", {})
-
-    if not accounts or not any(a["current_balance"] is not None for a in accounts):
-        return ""
-
-    lines = ["\U0001f4bc \u0411\u0430\u043b\u0430\u043d\u0441\u044b:"]
-
-    # Per-account lines with delta
-    for a in accounts:
-        cur_bal = a["current_balance"]
-        if cur_bal is None:
-            continue
-        sym = _cur_sym(a["currency"])
-        delta = a["delta"]
-        delta_str = ""
-        if delta is not None and delta != 0:
-            sign = "+" if delta > 0 else "\u2212"
-            delta_str = f" ({sign}{_fmt_amount(abs(delta))})"
-        lines.append(f"  {a['name']}: {_fmt_amount(cur_bal)} {sym}{delta_str}")
-
-    # Grand total in RUB
-    if total_by_currency:
-        total_parts = [f"{_fmt_amount(amt)} {_cur_sym(cur)}" for cur, amt in total_by_currency.items()]
-        total_line = "  \u0418\u0442\u043e\u0433\u043e: " + ", ".join(total_parts)
-
-        if len(total_by_currency) > 1 or "RUB" not in total_by_currency:
-            total_rub = Decimal("0")
-            ok = True
-            for cur, amt in total_by_currency.items():
-                converted = convert_to_rub(amt, cur, for_date, db)
-                if converted is None:
-                    ok = False
-                else:
-                    total_rub += converted
-            if ok:
-                total_line += f" \u2248 {_fmt_amount(total_rub)} \u20bd"
-        lines.append(total_line)
-
-    return "\n".join(lines)
+def _fmt_multicur(by_cur: dict[str, Decimal]) -> str:
+    """Format multi-currency amounts as '12 340 ₽ | 49 $'."""
+    if not by_cur:
+        return "0 \u20bd"
+    return " | ".join(f"{_fmt_amount(v)} {_cur_sym(c)}" for c, v in by_cur.items())
 
 
 def _render_month(
     summary: dict,
     for_date: date,
-    grand_total_rub: str | None = None,
-    prev_summary: dict | None = None,
-    balance_section: str = "",
     planned_totals: dict | None = None,
-    budget_pressure: int = 0,
-    debts_block: str = "",
+    budget_statuses: list | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Render month summary text and keyboard."""
+    """Render month summary text and keyboard per CPO mockup."""
     month_label = f"{_MONTH_RU[for_date.month]} {for_date.year}"
-
-    # Факт (actual, is_planned=False)
-    if summary["spend_by_currency"]:
-        spend_block = _format_currency_block(summary["spend_by_currency"])
-    else:
-        spend_block = "  Расходов пока нет."
-
-    if summary["income_by_currency"]:
-        income_block = _format_currency_block(summary["income_by_currency"])
-    else:
-        income_block = "  Ничего за этот месяц."
-
-    # План до конца месяца (is_planned=True future transactions)
-    if planned_totals:
-        plan_parts = [f"{_fmt_amount(amt)} {_cur_sym(cur)}" for cur, amt in planned_totals.items()]
-        plan_str = "  " + "  |  ".join(plan_parts)
-    else:
-        # Fallback: planned payments from PlannedPayment table
-        planned = summary["upcoming_until_month_end"]
-        if planned:
-            by_cur: dict[str, Decimal] = {}
-            for x in planned:
-                cur = x["currency"]
-                by_cur[cur] = by_cur.get(cur, Decimal("0")) + Decimal(str(x["amount"]))
-            plan_str = "  " + "  |  ".join(f"{_fmt_amount(a)} {_cur_sym(c)}" for c, a in by_cur.items())
-        else:
-            plan_str = "  Ничего не запланировано."
-
-    # Top tags — ASCII bar + MoM dynamics (Факт only)
-    tags = summary["top_tags"]
-    prev_tags = (prev_summary or {}).get("top_tags", [])
-    spend_total = sum(summary["spend_by_currency"].values(), Decimal("0"))
-    if tags:
-        tags_block = _tag_list(tags, prev_tags, spend_total)
-    else:
-        tags_block = "  Тегов пока нет."
-
+    spend_by_cur = summary["spend_by_currency"]
+    income_by_cur = summary["income_by_currency"]
     untagged = summary.get("untagged_count", 0)
 
-    lines = [
-        f"📊 <b>{month_label}</b>",
-        "",
-        f"<b>Факт:</b>\n{spend_block}",
-    ]
-    if grand_total_rub:
-        lines.append(f"  {grand_total_rub}")
-    lines += [
-        "",
-        f"Доходы:\n{income_block}",
-        "",
-        f"<b>План до конца месяца:</b>\n{plan_str}",
-    ]
+    # ── Остаток = income − spend per currency ─────────────────────────────
+    all_curs = sorted(set(spend_by_cur) | set(income_by_cur))
+    balance_by_cur: dict[str, Decimal] = {
+        cur: income_by_cur.get(cur, Decimal("0")) - spend_by_cur.get(cur, Decimal("0"))
+        for cur in all_curs
+    }
+    has_negative_balance = any(v < 0 for v in balance_by_cur.values())
+    balance_parts = []
+    for cur, val in balance_by_cur.items():
+        prefix = "+" if val >= 0 else ""
+        balance_parts.append(f"{prefix}{_fmt_amount(val)} {_cur_sym(cur)}")
+    balance_str = " | ".join(balance_parts) if balance_parts else "0 \u20bd"
+    balance_line = f"💰 Остаток: {balance_str}" + (" ⚠️" if has_negative_balance else "")
 
-    if budget_pressure > 0:
-        lines.append(f"\n⚠️ {budget_pressure} {'категория под давлением' if budget_pressure == 1 else 'категории под давлением'}")
+    # ── Расходы / Доходы ──────────────────────────────────────────────────
+    spend_line = f"📤 Расходы: {_fmt_multicur(spend_by_cur)}"
+    income_line = f"📥 Доходы: {_fmt_multicur(income_by_cur)}"
 
-    lines += [
-        "",
-        f"Топ теги (факт):\n{tags_block}",
-    ]
+    # ── План до конца месяца ──────────────────────────────────────────────
+    plan_lines: list[str] = []
+    if planned_totals:
+        plan_str = " | ".join(
+            f"{_fmt_amount(v)} {_cur_sym(c)}" for c, v in planned_totals.items()
+        )
+        plan_line = f"📅 План до конца месяца: {plan_str}"
+        # → после плана (only for currencies present in balance)
+        after_parts = []
+        after_negative = False
+        for cur, plan_amt in planned_totals.items():
+            bal = balance_by_cur.get(cur)
+            if bal is not None:
+                after = bal - plan_amt
+                prefix = "+" if after >= 0 else ""
+                after_parts.append(f"{prefix}{_fmt_amount(after)} {_cur_sym(cur)}")
+                if after < 0:
+                    after_negative = True
+        if after_parts:
+            after_str = " | ".join(after_parts)
+            plan_line += f" → после плана останется: {after_str}" + (" ⚠️" if after_negative else "")
+        plan_lines = [plan_line]
 
-    if balance_section:
-        lines += ["", balance_section]
+    # ── Бюджеты (топ риски) ───────────────────────────────────────────────
+    budget_lines: list[str] = []
+    if budget_statuses:
+        over = [s for s in budget_statuses if s["status"] == "over_budget"]
+        risk = [s for s in budget_statuses if s["status"] == "at_risk"]
+        ok_first = next((s for s in budget_statuses if s["status"] == "ok"), None)
+        risk_items = over + risk + ([ok_first] if ok_first else [])
+        if risk_items:
+            budget_lines.append("📊 Бюджеты (топ риски):")
+            for s in risk_items:
+                name = s["category_name"]
+                sym = _cur_sym(s["currency"])
+                if s["status"] == "over_budget":
+                    overage = s["actual_spent"] - s["limit_amount"]
+                    budget_lines.append(f"• {name} 🔴 перерасход {_fmt_amount(overage)} {sym}")
+                elif s["status"] == "at_risk":
+                    rem = s["remaining_after_planned"]
+                    budget_lines.append(f"• {name} ⚠️ риск ({_fmt_amount(rem)} осталось)")
+                else:
+                    rem = s["remaining_after_planned"]
+                    budget_lines.append(f"• {name} ✅ {_fmt_amount(rem)} осталось")
 
-    if debts_block:
-        lines += ["", debts_block]
+    # ── Топ теги (top-3, is_planned=False already filtered in month_summary) ─
+    top_tags = summary["top_tags"][:3]
+    tag_lines: list[str] = []
+    if top_tags:
+        tag_lines.append("🏷 Топ теги:")
+        for t in top_tags:
+            amt_str = _fmt_multicur(t["by_currency"])
+            tag_lines.append(f"• {t['tag']} {amt_str}")
 
+    # ── Assemble ──────────────────────────────────────────────────────────
+    sep = "──────────────────"
+    lines: list[str] = [f"<b>{month_label}</b>", ""]
+    lines += [balance_line, spend_line, income_line]
+    lines += plan_lines
+    if budget_lines:
+        lines += [sep] + budget_lines
+    if tag_lines:
+        lines += [sep] + tag_lines
     if untagged:
-        lines += ["", f"⚠️ {untagged} записей без тега — нажми кнопку ниже."]
+        lines += ["", f"Без тега: {untagged}"]
 
     keyboard = _build_month_keyboard(untagged, for_date)
     return "\n".join(lines), keyboard
 
 
 def _fetch_and_render(db, user, for_date: date) -> tuple[str, InlineKeyboardMarkup]:
-    """Shared logic: fetch summary + balance, render month view."""
+    """Shared logic: fetch summary, render month view."""
     svc = FinanceService(db)
     summary = svc.month_summary(str(user.household_id), for_date=for_date)
-    prev_summary = svc.month_summary(str(user.household_id), for_date=_prev_month(for_date))
-    grand_total_rub = _compute_grand_total_rub(summary["spend_by_currency"], for_date, db)
-
-    # Planned (is_planned=True) totals per currency
     planned_totals = svc.get_planned_total(str(user.household_id), for_date.year, for_date.month)
 
-    # Balance section
-    balance_data = svc.balance_summary(str(user.household_id), for_date=for_date)
-    balance_section = _render_balance_section(balance_data, for_date, db)
-
-    # Budget pressure (at_risk + over_budget count)
-    budget_pressure = 0
+    budget_statuses: list = []
     try:
         from app.application.services.budget_service import get_budget_status
         month_key = for_date.strftime("%Y-%m")
-        statuses = get_budget_status(str(user.household_id), month_key, db)
-        budget_pressure = sum(1 for s in statuses if s["status"] in ("at_risk", "over_budget"))
+        budget_statuses = get_budget_status(str(user.household_id), month_key, db) or []
     except Exception:
         pass
 
-    # Debts block
-    debts_block = _build_debts_block(str(user.household_id), for_date, db)
-
     return _render_month(
-        summary, for_date, grand_total_rub, prev_summary, balance_section,
+        summary,
+        for_date,
         planned_totals=planned_totals or None,
-        budget_pressure=budget_pressure,
-        debts_block=debts_block,
+        budget_statuses=budget_statuses,
     )
 
 
