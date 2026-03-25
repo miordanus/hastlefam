@@ -96,10 +96,10 @@ def _build_budgets_keyboard(statuses: list, month_key: str) -> InlineKeyboardMar
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@router.message(Command("budgets"))
-async def cmd_budgets(message: Message):
+async def send_budgets(message: Message, telegram_id: str):
+    """Shared helper — telegram_id passed explicitly (safe from callbacks)."""
     with SessionLocal() as db:
-        user = _find_user(db, str(message.from_user.id)) if message.from_user else None
+        user = _find_user(db, telegram_id)
         if not user:
             await message.answer("⚠️ Профиль не найден.")
             return
@@ -110,6 +110,11 @@ async def cmd_budgets(message: Message):
     text = _build_budgets_text(statuses, month_key)
     kb = _build_budgets_keyboard(statuses, month_key)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(Command("budgets"))
+async def cmd_budgets(message: Message):
+    await send_budgets(message, str(message.from_user.id) if message.from_user else "")
 
 
 # ─── Set limit flow ───────────────────────────────────────────────────────────

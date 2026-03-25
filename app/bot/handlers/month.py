@@ -480,8 +480,8 @@ async def on_month_inbox(callback: CallbackQuery) -> None:
 @router.callback_query(lambda c: c.data == "month:open_budgets")
 async def on_month_budgets(callback: CallbackQuery) -> None:
     await callback.answer()
-    from app.bot.handlers.budgets import cmd_budgets
-    await cmd_budgets(callback.message)
+    from app.bot.handlers.budgets import send_budgets
+    await send_budgets(callback.message, str(callback.from_user.id))
 
 
 @router.callback_query(lambda c: c.data == "month:open_upcoming")

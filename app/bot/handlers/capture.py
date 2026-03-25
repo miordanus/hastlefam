@@ -52,15 +52,6 @@ async def add_fallback(message: Message):
         await message.answer("⚠️ Не вижу сумму.\nНачни сообщение с числа.")
 
 
-@router.message(Command("income"))
-async def income_command(message: Message):
-    payload = message.text.replace("/income", "", 1).strip() if message.text else ""
-    if not payload:
-        await message.answer("⚠️ Не вижу сумму.\nПример: `/income 5000 зарплата`")
-        return
-    await _capture_text(message, f"+{payload}")
-
-
 @router.message()
 async def default_capture(message: Message):
     text = message.text or ""
@@ -175,6 +166,13 @@ async def _capture_text(message: Message, text: str) -> None:
             db.commit()
             tx_id = str(tx.id)
 
+            # Budget alert check (non-blocking, best-effort)
+            try:
+                from app.application.services.budget_service import check_and_alert
+                await check_and_alert(str(user.household_id), db, message.bot, message.chat.id)
+            except Exception:
+                pass
+
     except Exception as e:
         log.error("capture save failed: %s", e, exc_info=True)
         await message.answer("⚠️ Сейчас не получилось обработать запрос.\nПопробуй ещё раз чуть позже.")
@@ -248,15 +246,15 @@ async def _handle_split_confirm(message: Message, result) -> None:
         return
 
     # Encode params in callback data (compact format, ≤64 bytes)
-    # split_yes:<amount>:<merchant_truncated>:<date_from>:<date_to>
-    merchant_safe = result.merchant[:15].replace(":", "")
-    cb_data = (
-        f"{_CB_SPLIT_YES}"
-        f"{result.amount}:"
-        f"{merchant_safe}:"
-        f"{result.date_from.isoformat()}:"
-        f"{result.date_to.isoformat()}"
+    # split_yes:<amount>:<merchant_8bytes>:<YYYYMMDD>:<YYYYMMDD>
+    merchant_safe = (
+        result.merchant.encode("utf-8")[:8]
+        .decode("utf-8", errors="ignore")
+        .replace(":", "")
     )
+    date_from_str = result.date_from.strftime("%Y%m%d")
+    date_to_str   = result.date_to.strftime("%Y%m%d")
+    cb_data = f"{_CB_SPLIT_YES}{result.amount}:{merchant_safe}:{date_from_str}:{date_to_str}"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Да", callback_data=cb_data),
@@ -282,8 +280,8 @@ async def cb_split_confirm(call: CallbackQuery) -> None:
     try:
         amount = Decimal(parts[0])
         merchant = parts[1]
-        date_from = datetime.fromisoformat(parts[2]).date()
-        date_to = datetime.fromisoformat(parts[3]).date()
+        date_from = datetime.strptime(parts[2], "%Y%m%d").date()
+        date_to = datetime.strptime(parts[3], "%Y%m%d").date()
     except Exception:
         await call.answer("Ошибка разбора данных.")
         return
