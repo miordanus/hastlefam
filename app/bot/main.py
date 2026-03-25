@@ -19,6 +19,8 @@ from app.bot.handlers.inbox import router as inbox_router
 from app.bot.handlers.balances import router as balances_router
 from app.bot.handlers.rules import router as rules_router
 from app.bot.handlers.ask import router as ask_router
+from app.bot.handlers.budgets import router as budgets_router
+from app.bot.handlers.debts import router as debts_router
 from app.bot.middlewares.logging import LoggingMiddleware
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.logging.logger import configure_logging
@@ -164,6 +166,8 @@ async def main() -> None:
     dp.include_router(balances_router)
     dp.include_router(rules_router)
     dp.include_router(ask_router)
+    dp.include_router(budgets_router)
+    dp.include_router(debts_router)
     dp.include_router(capture_router)
 
     # Catch-all error handler — log every unhandled exception from any handler

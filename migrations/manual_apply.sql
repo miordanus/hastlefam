@@ -624,3 +624,62 @@ WHERE t.account_id IS NULL;
 -- ─────────────────────────────────────────────────────────────────────────────
 
 COMMIT;
+
+-- =============================================================================
+-- Migration 0014: is_planned on transactions
+-- ЗАКОН: is_planned=True НИКОГДА не входит в расходы/доходы.
+-- =============================================================================
+BEGIN;
+
+ALTER TABLE hastlefam.transactions
+  ADD COLUMN IF NOT EXISTS is_planned BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS ix_transactions_is_planned
+  ON hastlefam.transactions(is_planned);
+
+COMMIT;
+
+-- =============================================================================
+-- Migration 0015: category_budgets
+-- =============================================================================
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS hastlefam.category_budgets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    household_id UUID NOT NULL REFERENCES hastlefam.households(id),
+    month_key VARCHAR(7) NOT NULL,
+    category_id UUID REFERENCES hastlefam.finance_categories(id),
+    limit_amount NUMERIC(14,2) NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'RUB',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(household_id, month_key, category_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_category_budgets_household_month
+  ON hastlefam.category_budgets(household_id, month_key);
+
+COMMIT;
+
+-- =============================================================================
+-- Migration 0016: debts
+-- =============================================================================
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS hastlefam.debts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    household_id UUID NOT NULL REFERENCES hastlefam.households(id),
+    counterparty_name VARCHAR(255) NOT NULL,
+    amount NUMERIC(14,2) NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'RUB',
+    direction VARCHAR(20) NOT NULL CHECK (direction IN ('i_owe', 'they_owe')),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    due_date DATE,
+    settled_at TIMESTAMPTZ,
+    linked_transaction_id UUID REFERENCES hastlefam.transactions(id) ON DELETE SET NULL,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_debts_household_id ON hastlefam.debts(household_id);
+CREATE INDEX IF NOT EXISTS ix_debts_settled_at ON hastlefam.debts(settled_at);
+
+COMMIT;

@@ -53,3 +53,8 @@ class DraftType(StrEnum):
     MEETING_SUMMARY = 'meeting_summary'
     FINANCE_INSIGHT = 'finance_insight'
     WEEKLY_DIGEST = 'weekly_digest'
+
+
+class DebtDirection(StrEnum):
+    I_OWE = 'i_owe'      # ты должен
+    THEY_OWE = 'they_owe'  # тебе должны

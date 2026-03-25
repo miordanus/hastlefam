@@ -8,6 +8,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+# ЗАКОН: get_monthly_actual() фильтрует is_planned=False.
+# get_planned_total() фильтрует is_planned=True AND occurred_at > now().
+# Смешивать нельзя нигде. Проверяй каждый новый запрос.
+
 from app.domain.enums import Currency, TransactionDirection
 from app.infrastructure.db.models import Account, BalanceSnapshot, PlannedPayment, Transaction
 
@@ -35,6 +39,7 @@ class FinanceService:
                 Transaction.occurred_at >= month_start_dt,
                 Transaction.occurred_at <= month_end_dt,
                 Transaction.direction != TransactionDirection.TRANSFER,
+                Transaction.is_planned == False,  # noqa: E712 — ЗАКОН: actual only
             )
             .all()
         )
@@ -111,6 +116,7 @@ class FinanceService:
                 Transaction.household_id == hid,
                 Transaction.occurred_at >= month_start_dt,
                 Transaction.occurred_at <= today_end_dt,
+                Transaction.is_planned == False,  # noqa: E712 — ЗАКОН: actual only
             )
             .all()
         )
@@ -139,6 +145,38 @@ class FinanceService:
             "planned_soon": planned_soon,
             "untagged_count": untagged_count,
         }
+
+    # ─── Planned totals (is_planned=True) ────────────────────────────────────
+
+    def get_planned_total(self, household_id: str, year: int, month: int) -> dict[str, Decimal]:
+        """Sum of planned (is_planned=True) future transactions for the month, per currency.
+
+        ЗАКОН: фильтр is_planned=True AND occurred_at > now().
+        """
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        now = datetime.now(timezone.utc)
+        month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+        last_day = calendar.monthrange(year, month)[1]
+        month_end = datetime(year, month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.occurred_at >= month_start,
+                Transaction.occurred_at <= month_end,
+                Transaction.occurred_at > now,
+                Transaction.is_planned == True,  # noqa: E712 — ЗАКОН: planned only
+                Transaction.direction == TransactionDirection.EXPENSE,
+            )
+            .all()
+        )
+
+        totals: dict[str, Decimal] = {}
+        for tx in rows:
+            cur = tx.currency.value if tx.currency else "RUB"
+            totals[cur] = totals.get(cur, Decimal("0")) + Decimal(str(tx.amount))
+        return totals
 
     # ─── Planned payments ─────────────────────────────────────────────────────
 

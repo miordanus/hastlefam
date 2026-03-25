@@ -202,6 +202,9 @@ class Transaction(Base):
     dedup_fingerprint: Mapped[str | None] = mapped_column(String(128), index=True)
     primary_tag: Mapped[str | None] = mapped_column(String(64), index=True)
     extra_tags: Mapped[list | None] = mapped_column(JSON, default=list)
+    # ЗАКОН: is_planned=True НИКОГДА не входит в расходы/доходы.
+    # Нарушать нельзя нигде: finance_service, month, ask, insights.
+    is_planned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Exchange-specific fields (direction=EXCHANGE only)
     from_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     from_currency: Mapped[str | None] = mapped_column(String(10))
@@ -345,6 +348,41 @@ class MerchantTagRule(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class Debt(Base):
+    """Tracks money lent or borrowed. direction='i_owe' or 'they_owe'."""
+    __tablename__ = "debts"
+    __table_args__ = (
+        Index("ix_debts_household_id", "household_id"),
+        Index("ix_debts_settled_at", "settled_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    counterparty_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="RUB")
+    direction: Mapped[str] = mapped_column(String(20), nullable=False)  # 'i_owe' or 'they_owe'
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    linked_transaction_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("transactions.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class CategoryBudget(Base):
+    """Monthly budget limit per category per household."""
+    __tablename__ = "category_budgets"
+    __table_args__ = (
+        Index("ix_category_budgets_household_month", "household_id", "month_key"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    month_key: Mapped[str] = mapped_column(String(7), nullable=False)  # '2026-03'
+    category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("finance_categories.id"))
+    limit_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="RUB")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class FxRate(Base):
