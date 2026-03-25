@@ -12,13 +12,14 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.bot.handlers.inline_actions import build_post_capture_keyboard
 from app.bot.parsers.expense_parser import parse
-from app.infrastructure.db.models import Transaction, User
+from app.bot.parsers import debt_parser, split_parser
+from app.infrastructure.db.models import Debt, Transaction, User
 from app.infrastructure.db.session import SessionLocal
 
 router = Router()
@@ -69,6 +70,19 @@ async def default_capture(message: Message):
 
 
 async def _capture_text(message: Message, text: str) -> None:
+    # 1. Debt parser — check before expense_parser (DO NOT reorder)
+    debt_result = debt_parser.parse(text)
+    if debt_result is not None:
+        await _handle_debt(message, debt_result)
+        return
+
+    # 2. Split parser — check before expense_parser (DO NOT reorder)
+    split_result = split_parser.parse(text)
+    if split_result is not None:
+        await _handle_split_confirm(message, split_result)
+        return
+
+    # 3. expense_parser — main flow (DO NOT TOUCH)
     from app.bot.parsers.expense_parser import ParseResult
     result = parse(text)
 
@@ -149,6 +163,7 @@ async def _capture_text(message: Message, text: str) -> None:
                 dedup_fingerprint=fingerprint,
                 primary_tag=effective_tag,
                 extra_tags=result.extra_tags or [],
+                is_planned=False,  # ЗАКОН: capture = actual
             )
             db.add(tx)
 
@@ -182,3 +197,149 @@ async def _capture_text(message: Message, text: str) -> None:
         body = f"✅ Записал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant}"
 
     await message.answer(body, reply_markup=keyboard)
+
+
+# ─── Debt flow ─────────────────────────────────────────────────────────────────
+
+async def _handle_debt(message: Message, result) -> None:
+    """Save debt record and confirm to user."""
+    try:
+        with SessionLocal() as db:
+            user = _find_user(db, str(message.from_user.id)) if message.from_user else None
+            if not user:
+                await message.answer(_no_user_msg())
+                return
+
+            debt = Debt(
+                id=uuid.uuid4(),
+                household_id=user.household_id,
+                counterparty_name=result.counterparty,
+                amount=result.amount,
+                currency=result.currency,
+                direction=result.direction.value,
+            )
+            db.add(debt)
+            db.commit()
+
+        from app.domain.enums import DebtDirection
+        if result.direction == DebtDirection.THEY_OWE:
+            msg = f"💸 Записал: {result.counterparty} должен тебе {result.amount} {result.currency}."
+        else:
+            msg = f"💸 Записал: ты должен {result.counterparty} {result.amount} {result.currency}."
+        await message.answer(msg)
+
+    except Exception as e:
+        log.error("debt save failed: %s", e, exc_info=True)
+        await message.answer("⚠️ Не удалось записать долг. Попробуй ещё раз.")
+
+
+# ─── Split confirmation flow ───────────────────────────────────────────────────
+
+_CB_SPLIT_YES = "split_yes:"
+_CB_SPLIT_NO = "split_no"
+
+
+async def _handle_split_confirm(message: Message, result) -> None:
+    """Show split confirmation: Создать N транзакций по X RUB (DD.MM–DD.MM)?"""
+    if result.n_days > 31:
+        await message.answer(
+            f"⚠️ Диапазон дат {result.n_days} дней — максимум 31. Уточни даты."
+        )
+        return
+
+    # Encode params in callback data (compact format, ≤64 bytes)
+    # split_yes:<amount>:<merchant_truncated>:<date_from>:<date_to>
+    merchant_safe = result.merchant[:15].replace(":", "")
+    cb_data = (
+        f"{_CB_SPLIT_YES}"
+        f"{result.amount}:"
+        f"{merchant_safe}:"
+        f"{result.date_from.isoformat()}:"
+        f"{result.date_to.isoformat()}"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да", callback_data=cb_data),
+        InlineKeyboardButton(text="❌ Нет", callback_data=_CB_SPLIT_NO),
+    ]])
+    fmt_from = result.date_from.strftime("%d.%m")
+    fmt_to = result.date_to.strftime("%d.%m")
+    await message.answer(
+        f"Создать {result.n_days} транзакций по {result.amount_per_day} ₽\n"
+        f"({fmt_from}–{fmt_to}) · {result.merchant}?",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data.startswith(_CB_SPLIT_YES))
+async def cb_split_confirm(call: CallbackQuery) -> None:
+    """Create split transactions on ✅ confirmation."""
+    parts = call.data[len(_CB_SPLIT_YES):].split(":")
+    if len(parts) < 4:
+        await call.answer("Ошибка данных.")
+        return
+
+    try:
+        amount = Decimal(parts[0])
+        merchant = parts[1]
+        date_from = datetime.fromisoformat(parts[2]).date()
+        date_to = datetime.fromisoformat(parts[3]).date()
+    except Exception:
+        await call.answer("Ошибка разбора данных.")
+        return
+
+    n_days = (date_to - date_from).days + 1
+    amount_per_day = (amount / n_days).quantize(Decimal("0.01"))
+
+    try:
+        with SessionLocal() as db:
+            user = _find_user(db, str(call.from_user.id)) if call.from_user else None
+            if not user:
+                await call.message.answer(_no_user_msg())
+                await call.answer()
+                return
+
+            from app.application.services.finance_service import FinanceService
+            default_account = FinanceService(db).get_or_create_default_account(str(user.household_id))
+
+            from app.domain.enums import Currency, TransactionDirection
+            created = 0
+            for i in range(n_days):
+                from datetime import timedelta
+                tx_date = date_from + timedelta(days=i)
+                tx = Transaction(
+                    id=uuid.uuid4(),
+                    household_id=user.household_id,
+                    user_id=user.id,
+                    account_id=default_account.id,
+                    direction=TransactionDirection.EXPENSE,
+                    amount=amount_per_day,
+                    currency=Currency.RUB,
+                    occurred_at=datetime(tx_date.year, tx_date.month, tx_date.day, tzinfo=timezone.utc),
+                    merchant_raw=merchant,
+                    source="telegram",
+                    parse_status="ok",
+                    parse_confidence=Decimal("0.900"),
+                    is_planned=False,  # ЗАКОН: split = actual
+                )
+                db.add(tx)
+                created += 1
+            db.commit()
+
+        fmt_from = date_from.strftime("%d.%m")
+        fmt_to = date_to.strftime("%d.%m")
+        await call.message.answer(
+            f"✅ Создал {created} транзакций по {amount_per_day} ₽\n"
+            f"({fmt_from}–{fmt_to}) · {merchant}"
+        )
+    except Exception as e:
+        log.error("split save failed: %s", e, exc_info=True)
+        await call.message.answer("⚠️ Не удалось создать транзакции. Попробуй ещё раз.")
+
+    await call.answer()
+
+
+@router.callback_query(F.data == _CB_SPLIT_NO)
+async def cb_split_cancel(call: CallbackQuery) -> None:
+    await call.message.answer("❌ Отменено.")
+    await call.answer()

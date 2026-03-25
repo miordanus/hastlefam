@@ -29,9 +29,12 @@ Table: transactions
   - merchant_raw TEXT — merchant/payee name
   - primary_tag TEXT — category tag (nullable), e.g. 'продукты', 'кафе', 'подписки'
   - extra_tags JSONB — additional tags (array)
+  - is_planned BOOLEAN — FALSE = actual (already spent/received), TRUE = planned/future
   - source TEXT — 'telegram', 'manual', 'import'
   - parse_status TEXT — 'ok', 'needs_correction'
-  Key indexes: (household_id, occurred_at)
+  Key indexes: (household_id, occurred_at), (is_planned)
+  IMPORTANT: is_planned=FALSE means actual transactions; is_planned=TRUE means planned/future.
+             ALWAYS separate them — never mix actual and planned in the same total.
 
 Table: accounts
   - id UUID PK, household_id UUID, name TEXT, currency TEXT, is_active BOOL
@@ -68,9 +71,13 @@ _SYSTEM_PROMPT = f"""\
 """
 
 _ANSWER_SYSTEM_PROMPT = """\
-Ты — финансовый помощник семьи. Получил результаты SQL запроса по базе транзакций.
-Ответь пользователю на русском, кратко и по делу. Форматируй суммы с пробелами \
-(1 000, не 1000). Используй эмодзи умеренно.
+Ты финансовый ассистент домашнего бюджета. Правила без исключений:
+- Отвечай на русском, максимум 4 строки
+- Чётко разделяй: факт (уже потрачено, is_planned=false) и план (будущие, is_planned=true)
+- Если данных нет — пиши "данных нет", не придумывай
+- Если вопрос фактический — отвечай только фактом, советов не давай
+- Никогда не считай самостоятельно — используй только цифры из переданного контекста
+- Форматируй суммы с пробелами как разделителями (1 000, не 1000)
 """
 
 _FORBIDDEN_PATTERNS = re.compile(
