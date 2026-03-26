@@ -85,6 +85,209 @@ def _next_month(d: date) -> date:
     return date(d.year, d.month + 1, 1)
 
 
+# ── ARCHIVED 2026-03-26 ─────────────────────────────────────────────────────
+# Functions below were part of the old /month rendering (ASCII bars, MoM
+# dynamics, grand-total RUB, balance section, debts block). Replaced by the
+# CPO-mockup redesign. Kept here for reference; do NOT import or call.
+#
+# Archived imports (required by helpers below):
+#   from app.application.services.fx_service import convert_to_rub
+#   from app.domain.enums import DebtDirection
+#   from app.infrastructure.db.models import Debt
+#
+# def _format_currency_block(by_currency: dict[str, Decimal]) -> str:
+#     if not by_currency:
+#         return "  0 \u20bd"
+#     return "\n".join(f"  {_fmt_amount(v)} {_cur_sym(cur)}" for cur, v in by_currency.items())
+#
+# def _ascii_bar(value: Decimal, max_value: Decimal, width: int = 10) -> str:
+#     """Return an ASCII bar like '████░░░░░░' proportional to value/max_value."""
+#     if max_value <= 0:
+#         return "░" * width
+#     filled = int(round(float(value / max_value) * width))
+#     filled = max(0, min(filled, width))
+#     return "█" * filled + "░" * (width - filled)
+#
+# def _tag_list(tags: list, prev_tags: list, spend_total: Decimal) -> str:
+#     """Build tag list with ASCII bars and MoM dynamics (Факт only: is_planned=False)."""
+#     if not tags:
+#         return ""
+#     prev_map = {t["tag"]: t["amount"] for t in prev_tags}
+#     max_amt = max((t["amount"] for t in tags[:5]), default=Decimal("0"))
+#     lines = []
+#     for t in tags[:5]:
+#         tag = t["tag"]
+#         amt = t["amount"]
+#         bar = _ascii_bar(amt, max_amt)
+#         prev_amt = prev_map.get(tag)
+#         if prev_amt is None:
+#             dyn = "  new"
+#         elif prev_amt > 0:
+#             change_pct = (amt - prev_amt) / prev_amt * 100
+#             if change_pct >= 1:
+#                 dyn = f"  ▲ +{change_pct:.0f}%"
+#             elif change_pct <= -1:
+#                 dyn = f"  ▼ {change_pct:.0f}%"
+#             else:
+#                 dyn = ""
+#         else:
+#             dyn = ""
+#         lines.append(f"{tag}  {bar}  {_fmt_amount(amt)}{dyn}")
+#     return "\n".join(lines)
+#
+# def _compute_grand_total_rub(by_currency: dict[str, Decimal], for_date: date, db) -> str | None:
+#     """Return a formatted grand-total RUB string, or unavailable note."""
+#     if not by_currency:
+#         return None
+#     if list(by_currency.keys()) == ["RUB"]:
+#         return None
+#     total = Decimal("0")
+#     unavailable = False
+#     for cur, amt in by_currency.items():
+#         converted = convert_to_rub(amt, cur, for_date, db)
+#         if converted is None:
+#             unavailable = True
+#         else:
+#             total += converted
+#     if unavailable:
+#         return "\u2248 ~ \u20bd (\u043a\u0443\u0440\u0441 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d)"
+#     return f"\u2248 {_fmt_amount(total)} \u20bd"
+#
+# def _format_planned_total(planned: list, for_date: date, db) -> str:
+#     """Compute planned payments total as currency summary + RUB equivalent."""
+#     if not planned:
+#         return ""
+#     by_cur: dict[str, Decimal] = {}
+#     for x in planned:
+#         cur = x["currency"]
+#         by_cur[cur] = by_cur.get(cur, Decimal("0")) + Decimal(str(x["amount"]))
+#     parts = [f"{_fmt_amount(amt)} {_cur_sym(cur)}" for cur, amt in by_cur.items()]
+#     line = "  \u0418\u0442\u043e\u0433\u043e: " + ", ".join(parts)
+#     if len(by_cur) > 1 or "RUB" not in by_cur:
+#         total_rub = Decimal("0")
+#         ok = True
+#         for cur, amt in by_cur.items():
+#             converted = convert_to_rub(amt, cur, for_date, db)
+#             if converted is None:
+#                 ok = False
+#             else:
+#                 total_rub += converted
+#         if ok:
+#             line += f" \u2248 {_fmt_amount(total_rub)} \u20bd"
+#     return line
+#
+# def _build_debts_block(household_id: str, for_date: date, db) -> str:
+#     """Build debts summary line: 'Долги: тебе должны +X / ты должен -Y'."""
+#     try:
+#         import uuid as _uuid
+#         hid = _uuid.UUID(household_id)
+#         open_debts = (
+#             db.query(Debt)
+#             .filter(Debt.household_id == hid, Debt.settled_at.is_(None))
+#             .all()
+#         )
+#         if not open_debts:
+#             return ""
+#         they_owe_rub = Decimal("0")
+#         i_owe_rub = Decimal("0")
+#         for d in open_debts:
+#             amount_rub = convert_to_rub(Decimal(str(d.amount)), d.currency, for_date, db)
+#             if amount_rub is None:
+#                 amount_rub = Decimal(str(d.amount))
+#             if d.direction == DebtDirection.THEY_OWE:
+#                 they_owe_rub += amount_rub
+#             else:
+#                 i_owe_rub += amount_rub
+#         parts = []
+#         if they_owe_rub > 0:
+#             parts.append(f"тебе должны +{_fmt_amount(they_owe_rub)} ₽")
+#         if i_owe_rub > 0:
+#             parts.append(f"ты должен \u2212{_fmt_amount(i_owe_rub)} ₽")
+#         if not parts:
+#             return ""
+#         return "💸 Долги: " + " / ".join(parts)
+#     except Exception:
+#         return ""
+#
+# def _render_balance_section(balance_summary: dict, for_date: date, db) -> str:
+#     """Render balance net worth + per-account deltas for /month."""
+#     accounts = balance_summary.get("accounts", [])
+#     total_by_currency = balance_summary.get("total_by_currency", {})
+#     if not accounts or not any(a["current_balance"] is not None for a in accounts):
+#         return ""
+#     lines = ["\U0001f4bc \u0411\u0430\u043b\u0430\u043d\u0441\u044b:"]
+#     for a in accounts:
+#         cur_bal = a["current_balance"]
+#         if cur_bal is None:
+#             continue
+#         sym = _cur_sym(a["currency"])
+#         delta = a["delta"]
+#         delta_str = ""
+#         if delta is not None and delta != 0:
+#             sign = "+" if delta > 0 else "\u2212"
+#             delta_str = f" ({sign}{_fmt_amount(abs(delta))})"
+#         lines.append(f"  {a['name']}: {_fmt_amount(cur_bal)} {sym}{delta_str}")
+#     if total_by_currency:
+#         total_parts = [f"{_fmt_amount(amt)} {_cur_sym(cur)}" for cur, amt in total_by_currency.items()]
+#         total_line = "  \u0418\u0442\u043e\u0433\u043e: " + ", ".join(total_parts)
+#         if len(total_by_currency) > 1 or "RUB" not in total_by_currency:
+#             total_rub = Decimal("0")
+#             ok = True
+#             for cur, amt in total_by_currency.items():
+#                 converted = convert_to_rub(amt, cur, for_date, db)
+#                 if converted is None:
+#                     ok = False
+#                 else:
+#                     total_rub += converted
+#             if ok:
+#                 total_line += f" \u2248 {_fmt_amount(total_rub)} \u20bd"
+#         lines.append(total_line)
+#     return "\n".join(lines)
+#
+# def _render_month(  # OLD signature — replaced by new CPO-mockup version above
+#     summary: dict, for_date: date,
+#     grand_total_rub: str | None = None, prev_summary: dict | None = None,
+#     balance_section: str = "", planned_totals: dict | None = None,
+#     budget_pressure: int = 0, debts_block: str = "",
+# ) -> tuple[str, InlineKeyboardMarkup]:
+#     month_label = f"{_MONTH_RU[for_date.month]} {for_date.year}"
+#     spend_block = _format_currency_block(summary["spend_by_currency"]) if summary["spend_by_currency"] else "  Расходов пока нет."
+#     income_block = _format_currency_block(summary["income_by_currency"]) if summary["income_by_currency"] else "  Ничего за этот месяц."
+#     if planned_totals:
+#         plan_str = "  " + "  |  ".join(f"{_fmt_amount(a)} {_cur_sym(c)}" for c, a in planned_totals.items())
+#     else:
+#         planned = summary["upcoming_until_month_end"]
+#         if planned:
+#             by_cur: dict[str, Decimal] = {}
+#             for x in planned:
+#                 cur = x["currency"]
+#                 by_cur[cur] = by_cur.get(cur, Decimal("0")) + Decimal(str(x["amount"]))
+#             plan_str = "  " + "  |  ".join(f"{_fmt_amount(a)} {_cur_sym(c)}" for c, a in by_cur.items())
+#         else:
+#             plan_str = "  Ничего не запланировано."
+#     tags = summary["top_tags"]
+#     prev_tags = (prev_summary or {}).get("top_tags", [])
+#     spend_total = sum(summary["spend_by_currency"].values(), Decimal("0"))
+#     tags_block = _tag_list(tags, prev_tags, spend_total) if tags else "  Тегов пока нет."
+#     untagged = summary.get("untagged_count", 0)
+#     lines = [f"📊 <b>{month_label}</b>", "", f"<b>Факт:</b>\n{spend_block}"]
+#     if grand_total_rub:
+#         lines.append(f"  {grand_total_rub}")
+#     lines += ["", f"Доходы:\n{income_block}", "", f"<b>План до конца месяца:</b>\n{plan_str}"]
+#     if budget_pressure > 0:
+#         lines.append(f"\n⚠️ {budget_pressure} {'категория под давлением' if budget_pressure == 1 else 'категории под давлением'}")
+#     lines += ["", f"Топ теги (факт):\n{tags_block}"]
+#     if balance_section:
+#         lines += ["", balance_section]
+#     if debts_block:
+#         lines += ["", debts_block]
+#     if untagged:
+#         lines += ["", f"⚠️ {untagged} записей без тега — нажми кнопку ниже."]
+#     keyboard = _build_month_keyboard(untagged, for_date)
+#     return "\n".join(lines), keyboard
+# ── END ARCHIVED ─────────────────────────────────────────────────────────────
+
+
 def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboardMarkup:
     from app.infrastructure.config.settings import get_settings
     settings = get_settings()

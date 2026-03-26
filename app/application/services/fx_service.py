@@ -109,7 +109,7 @@ def _upsert_rate(db, for_date: date, from_currency: str, rate: Decimal) -> None:
 
     db.execute(
         sa.text("""
-            INSERT INTO fx_rates (id, date, from_currency, to_currency, rate, created_at)
+            INSERT INTO hastlefam.fx_rates (id, date, from_currency, to_currency, rate, created_at)
             VALUES (gen_random_uuid(), :date, :from_cur, 'RUB', :rate, now())
             ON CONFLICT (date, from_currency, to_currency)
             DO UPDATE SET rate = EXCLUDED.rate
