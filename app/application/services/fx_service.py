@@ -80,27 +80,41 @@ async def fetch_and_store_rates() -> None:
 
     try:
         with SessionLocal() as db:
-            for our_code in _TRACKED:
-                cbr_code = _CBR_CHAR_CODES.get(our_code, our_code)
-                rate = cbr_rates.get(cbr_code)
-                if rate is None:
-                    continue
-                _upsert_rate(db, today, our_code, rate)
+            try:
+                for our_code in _TRACKED:
+                    cbr_code = _CBR_CHAR_CODES.get(our_code, our_code)
+                    rate = cbr_rates.get(cbr_code)
+                    if rate is None:
+                        continue
+                    _upsert_rate(db, today, our_code, rate)
 
-            # USDT ≈ USD (proxy)
-            usd_rate = cbr_rates.get("USD")
-            if usd_rate is not None:
-                _upsert_rate(db, today, "USDT", usd_rate)
+                # USDT ≈ USD (proxy)
+                usd_rate = cbr_rates.get("USD")
+                if usd_rate is not None:
+                    _upsert_rate(db, today, "USDT", usd_rate)
 
-            # AMD — CBR has it as well
-            amd_rate = cbr_rates.get("AMD")
-            if amd_rate is not None:
-                _upsert_rate(db, today, "AMD", amd_rate)
+                # AMD — CBR has it as well
+                amd_rate = cbr_rates.get("AMD")
+                if amd_rate is not None:
+                    _upsert_rate(db, today, "AMD", amd_rate)
 
-            db.commit()
-        log.info("fx_service: CBR rates updated for %s", today)
+                db.commit()
+                log.info("fx_service: CBR rates updated for %s", today)
+            except Exception as exc:
+                import psycopg.errors as _pg_errors  # psycopg v3
+
+                db.rollback()
+                if isinstance(exc.__cause__, _pg_errors.UndefinedTable) or isinstance(
+                    exc, _pg_errors.UndefinedTable
+                ):
+                    log.warning(
+                        "fx_rates table not found, skipping rate storage"
+                        " (run migrations to enable FX rate persistence)"
+                    )
+                else:
+                    log.warning("fx_service: failed to store rates: %s", exc)
     except Exception as exc:
-        log.warning("fx_service: failed to store rates: %s", exc)
+        log.warning("fx_service: failed to open DB session for rate storage: %s", exc)
 
 
 def _upsert_rate(db, for_date: date, from_currency: str, rate: Decimal) -> None:
