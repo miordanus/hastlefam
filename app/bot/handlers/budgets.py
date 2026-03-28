@@ -1,7 +1,7 @@
 """/budgets — Monthly category budget overview with limit management.
 
-Shows per-category: actual spent, planned, limit, remaining, status.
-Inline buttons: ✏️ Лимит (FSM), 📋 Транзакции (last 5).
+Shows per-category: actual spent, planned, limit (+rollover), remaining, status.
+Inline buttons: ✏️ Лимит (FSM), 📋 Транзакции (last 5), ↩️ Переносить (toggle rollover).
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 
 _CB_SET_LIMIT = "budget_set_limit:"
 _CB_TRANSACTIONS = "budget_txns:"
+_CB_TOGGLE_ROLLOVER = "budget_rollover:"
 
 
 class BudgetStates(StatesGroup):
@@ -61,18 +62,23 @@ def _build_budgets_text(statuses: list, month_key: str) -> str:
             cur = s["currency"]
             planned = s["planned_amount"]
             remaining = s["remaining_after_planned"]
+            rollover = s.get("rollover_amount", Decimal("0"))
+
+            rollover_suffix = ""
+            if rollover > 0:
+                rollover_suffix = f" (+{_fmt(rollover)} перенос)"
 
             if planned > 0:
                 line = (
                     f"{emoji} <b>{name}</b>  "
-                    f"{actual} + {_fmt(planned)} план / {limit} {cur}  "
+                    f"{actual} + {_fmt(planned)} план / {limit}{rollover_suffix} {cur}  "
                     f"осталось {_fmt(remaining)} {cur}"
                 )
             else:
                 sign = "+" if remaining >= 0 else ""
                 line = (
                     f"{emoji} <b>{name}</b>  "
-                    f"{actual} / {limit} {cur}  "
+                    f"{actual} / {limit}{rollover_suffix} {cur}  "
                     f"осталось {sign}{_fmt(remaining)} {cur}"
                 )
             lines.append(line)
@@ -86,11 +92,16 @@ def _build_budgets_keyboard(statuses: list, month_key: str) -> InlineKeyboardMar
     for s in statuses:
         budget_id = s["budget_id"]
         name = s["category_name"]
-        row = [
+        rollover_enabled = s.get("rollover_enabled", False)
+        rollover_label = "↩️ Не переносить" if rollover_enabled else "↩️ Переносить"
+
+        rows.append([
             InlineKeyboardButton(text=f"✏️ {name}: лимит", callback_data=f"{_CB_SET_LIMIT}{budget_id}"),
             InlineKeyboardButton(text="📋 Транзакции", callback_data=f"{_CB_TRANSACTIONS}{budget_id}:{month_key}"),
-        ]
-        rows.append(row)
+        ])
+        rows.append([
+            InlineKeyboardButton(text=rollover_label, callback_data=f"{_CB_TOGGLE_ROLLOVER}{budget_id}:{month_key}"),
+        ])
 
     rows.append([InlineKeyboardButton(text="➕ Новый лимит", callback_data=f"budget_new:{month_key}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -230,6 +241,32 @@ async def recv_limit(message: Message, state: FSMContext):
             await message.answer(f"✅ Бюджет создан: {_fmt(new_limit)} RUB")
         else:
             await message.answer("⚠️ Не удалось сохранить. Попробуй снова.")
+
+
+# ─── Toggle rollover ──────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith(_CB_TOGGLE_ROLLOVER))
+async def cb_toggle_rollover(call: CallbackQuery):
+    parts = call.data[len(_CB_TOGGLE_ROLLOVER):].split(":")
+    budget_id, month_key = parts[0], parts[1]
+
+    with SessionLocal() as db:
+        budget = db.get(CategoryBudget, uuid.UUID(budget_id))
+        if not budget:
+            await call.answer("Бюджет не найден.")
+            return
+        budget.rollover_enabled = not budget.rollover_enabled
+        db.commit()
+        household_id = str(budget.household_id)
+
+    # Re-render budgets
+    with SessionLocal() as db:
+        statuses = get_budget_status(household_id, month_key, db)
+
+    text = _build_budgets_text(statuses, month_key)
+    kb = _build_budgets_keyboard(statuses, month_key)
+    await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await call.answer()
 
 
 # ─── Transactions list ────────────────────────────────────────────────────────

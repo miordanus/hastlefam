@@ -205,6 +205,8 @@ class Transaction(Base):
     # ЗАКОН: is_planned=True НИКОГДА не входит в расходы/доходы.
     # Нарушать нельзя нигде: finance_service, month, ask, insights.
     is_planned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # is_skipped=True: planned transaction dismissed by user, hidden from /upcoming
+    is_skipped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Exchange-specific fields (direction=EXCHANGE only)
     from_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     from_currency: Mapped[str | None] = mapped_column(String(10))
@@ -382,6 +384,8 @@ class CategoryBudget(Base):
     category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("finance_categories.id"))
     limit_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="RUB")
+    rollover_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    rollover_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
