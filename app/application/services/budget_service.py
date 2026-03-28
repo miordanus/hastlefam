@@ -271,6 +271,7 @@ async def check_and_alert(
 
 
 def _fmt(amount: Decimal) -> str:
-    """Format amount with space thousands separator."""
-    parts = f"{amount:,.2f}".replace(",", " ")
-    return parts
+    """Format amount with space thousands separator. No trailing zeros for whole numbers."""
+    if amount == int(amount):
+        return f"{int(amount):,}".replace(",", " ")
+    return f"{amount:,.2f}".replace(",", " ")
