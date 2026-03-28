@@ -14,6 +14,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.services.finance_service import FinanceService
+from app.application.services.fx_service import convert_to_rub
 from app.infrastructure.db.models import User
 from app.infrastructure.db.session import SessionLocal
 
@@ -303,14 +304,16 @@ def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboard
         ))
     row1.append(InlineKeyboardButton(text="📊 Бюджеты", callback_data="month:open_budgets"))
     row1.append(InlineKeyboardButton(text="📅 План", callback_data="month:open_upcoming"))
-    if untagged_count > 0:
-        row1.append(InlineKeyboardButton(
-            text=f"🏷 Разобрать ({untagged_count})",
-            callback_data="month:open_inbox",
-        ))
     rows.append(row1)
 
-    # Row 2: navigation
+    # Row 2: Разобрать (only if untagged)
+    if untagged_count > 0:
+        rows.append([InlineKeyboardButton(
+            text=f"🏷 Разобрать ({untagged_count})",
+            callback_data="month:open_inbox",
+        )])
+
+    # Row 3: navigation
     prev_d = _prev_month(for_date)
     next_d = _next_month(for_date)
     rows.append([
@@ -339,6 +342,7 @@ def _render_month(
     for_date: date,
     planned_totals: dict | None = None,
     budget_statuses: list | None = None,
+    grand_total_rub: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Render month summary text and keyboard per CPO mockup."""
     month_label = f"{_MONTH_RU[for_date.month]} {for_date.year}"
@@ -422,6 +426,8 @@ def _render_month(
     sep = "──────────────────"
     lines: list[str] = [f"<b>{month_label}</b>", ""]
     lines += [balance_line, spend_line, income_line]
+    if grand_total_rub:
+        lines.append(grand_total_rub)
     lines += plan_lines
     if budget_lines:
         lines += [sep] + budget_lines
@@ -448,11 +454,28 @@ def _fetch_and_render(db, user, for_date: date) -> tuple[str, InlineKeyboardMark
     except Exception:
         pass
 
+    # Grand total spend in RUB (best-effort; None if no FX rates available)
+    grand_total_rub: str | None = None
+    try:
+        total = Decimal("0")
+        all_ok = True
+        for cur, amt in summary["spend_by_currency"].items():
+            converted = convert_to_rub(amt, cur, for_date, db)
+            if converted is None:
+                all_ok = False
+                break
+            total += converted
+        if summary["spend_by_currency"]:
+            grand_total_rub = f"≈ {_fmt_amount(total)} RUB" if all_ok else "≈ ~ RUB"
+    except Exception:
+        pass
+
     return _render_month(
         summary,
         for_date,
         planned_totals=planned_totals or None,
         budget_statuses=budget_statuses,
+        grand_total_rub=grand_total_rub,
     )
 
 
