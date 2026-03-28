@@ -1,12 +1,12 @@
 """
 balances.py — /balances command handler.
 
-Manual balance snapshot / checkpoint feature.
+Manual balance snapshot / reconcile feature.
 The user enters what they actually see in their account.
-The bot stores it and shows the delta vs the previous snapshot.
+The bot shows the delta before saving (reconcile confirmation step).
 
-This is NOT reconciliation. There is no expected-balance calculation.
-Account transaction attribution is too sparse for that to be reliable.
+Batch 1: renamed ✏️ Обновить → 🔄 Сверить, added reconcile confirm step, Net Worth label.
+Batch 2: added 📋 История button per account (running balance from last snapshot).
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.application.services.finance_service import FinanceService
 from app.application.services.fx_service import convert_to_rub
 from app.domain.enums import TransactionDirection
 from app.infrastructure.db.models import Account, BalanceSnapshot, Transaction, User
@@ -28,13 +29,17 @@ from app.infrastructure.db.session import SessionLocal
 router = Router()
 log = logging.getLogger(__name__)
 
-_CB_UPDATE = "bal:update:"      # bal:update:{account_id}
-_CB_ADD = "bal:add"             # open add-account flow
-_CB_SET_CUR = "bal:setcur:"    # bal:setcur:{currency}
+_CB_RECONCILE = "bal:reconcile:"    # bal:reconcile:{account_id}
+_CB_RECONCILE_OK = "bal:reconcile_ok"
+_CB_RECONCILE_CANCEL = "bal:reconcile_cancel"
+_CB_HISTORY = "bal:history:"        # bal:history:{account_id}
+_CB_ADD = "bal:add"                 # open add-account flow
+_CB_SET_CUR = "bal:setcur:"        # bal:setcur:{currency}
 
 
 class BalancesStates(StatesGroup):
     waiting_balance_amount = State()
+    waiting_reconcile_confirm = State()
     waiting_account_name = State()
     waiting_account_currency = State()
     waiting_first_balance = State()
@@ -65,18 +70,6 @@ def _latest_snapshot(db, account_id: uuid.UUID) -> BalanceSnapshot | None:
     )
 
 
-def _prev_snapshot(db, account_id: uuid.UUID, before_id: uuid.UUID) -> BalanceSnapshot | None:
-    return (
-        db.query(BalanceSnapshot)
-        .filter(
-            BalanceSnapshot.account_id == account_id,
-            BalanceSnapshot.id != before_id,
-        )
-        .order_by(BalanceSnapshot.created_at.desc())
-        .first()
-    )
-
-
 def _format_accounts(accounts: list[Account], snapshots: dict[uuid.UUID, BalanceSnapshot | None]) -> str:
     if not accounts:
         return ""
@@ -100,20 +93,18 @@ def _cur_sym(currency: str) -> str:
 
 def _build_accounts_keyboard(accounts: list[Account]) -> InlineKeyboardMarkup:
     rows = []
-    # Pack accounts 2 per row for compact layout
-    row: list[InlineKeyboardButton] = []
     for acc in accounts:
-        sym = _cur_sym(acc.currency.value)
-        row.append(InlineKeyboardButton(
-            text=f"{acc.name} {sym}",
-            callback_data=f"{_CB_UPDATE}{acc.id}",
-        ))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton(text="+ \u0421\u0447\u0451\u0442", callback_data=_CB_ADD)])
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🔄 Сверить: {acc.name}",
+                callback_data=f"{_CB_RECONCILE}{acc.id}",
+            ),
+            InlineKeyboardButton(
+                text="📋 История",
+                callback_data=f"{_CB_HISTORY}{acc.id}",
+            ),
+        ])
+    rows.append([InlineKeyboardButton(text="➕ Счёт", callback_data=_CB_ADD)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -141,7 +132,7 @@ async def send_balances(message: Message, telegram_id: str) -> None:
         snapshots = {acc.id: _latest_snapshot(db, acc.id) for acc in accounts}
         text = "💼 Счета\n\n" + _format_accounts(accounts, snapshots)
 
-        # Grand total in RUB
+        # Net Worth line: sum all account balances converted to RUB
         from datetime import date as _date
         today = _date.today()
         total_rub = Decimal("0")
@@ -157,10 +148,10 @@ async def send_balances(message: Message, telegram_id: str) -> None:
             else:
                 total_rub += rub
         if unavailable:
-            text += "\n\n≈ ~ RUB (курс недоступен)"
+            text += "\n\n≈ Net Worth: ~ RUB (курс недоступен)"
         else:
             formatted = f"{total_rub:,.0f}".replace(",", " ")
-            text += f"\n\n≈ {formatted} RUB"
+            text += f"\n\n≈ Net Worth: {formatted} RUB"
 
         keyboard = _build_accounts_keyboard(accounts)
 
@@ -172,12 +163,14 @@ async def balances_command(message: Message) -> None:
     await send_balances(message, str(message.from_user.id) if message.from_user else "")
 
 
-# ─── Update balance for existing account ──────────────────────────────────────
+# ─── Reconcile: enter amount ──────────────────────────────────────────────────
 
-@router.callback_query(lambda c: c.data and c.data.startswith(_CB_UPDATE))
-async def on_update_balance(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(lambda c: c.data and c.data.startswith(_CB_RECONCILE)
+                       and not c.data.startswith(_CB_RECONCILE_OK)
+                       and not c.data.startswith(_CB_RECONCILE_CANCEL))
+async def on_reconcile_balance(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    account_id = callback.data[len(_CB_UPDATE):]
+    account_id = callback.data[len(_CB_RECONCILE):]
 
     with SessionLocal() as db:
         acc = db.query(Account).filter(Account.id == uuid.UUID(account_id)).first()
@@ -212,21 +205,76 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
             f"/cancel — отменить и вернуться к записи трат"
         )
         return
+
+    with SessionLocal() as db:
+        acc = db.query(Account).filter(Account.id == uuid.UUID(account_id)).first()
+        if not acc:
+            await state.clear()
+            await message.answer("⚠️ Счёт не найден.")
+            return
+        acc_currency = acc.currency.value
+        prev = _latest_snapshot(db, acc.id)
+        prev_amount = Decimal(str(prev.actual_balance)) if prev else None
+
+    # Show reconcile confirmation with delta
+    await state.set_state(BalancesStates.waiting_reconcile_confirm)
+    await state.update_data(pending_amount=str(amount))
+
+    if prev_amount is not None:
+        delta = amount - prev_amount
+        sign = "+" if delta >= 0 else "−"
+        abs_delta = abs(delta)
+        direction_label = "доход" if delta >= 0 else "расход"
+        confirm_text = (
+            f"💼 {acc_name} · {acc_currency}\n\n"
+            f"Текущий баланс по системе: {prev_amount} {acc_currency}\n"
+            f"Ты вводишь: {amount} {acc_currency}\n"
+            f"Расхождение: {sign}{abs_delta} {acc_currency}\n\n"
+            f"Записать как {direction_label} без категории?"
+        )
+    else:
+        confirm_text = (
+            f"💼 {acc_name} · {acc_currency}\n\n"
+            f"Начальный баланс: {amount} {acc_currency}\n\n"
+            f"Сохранить?"
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да", callback_data=_CB_RECONCILE_OK),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=_CB_RECONCILE_CANCEL),
+    ]])
+    await message.answer(confirm_text, reply_markup=kb)
+
+
+@router.callback_query(lambda c: c.data == _CB_RECONCILE_OK)
+async def on_reconcile_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    account_id = data.get("account_id", "")
+    acc_name = data.get("account_name", "счёт")
+    pending_amount_str = data.get("pending_amount")
+
+    if not pending_amount_str:
+        await state.clear()
+        await callback.message.edit_text("⚠️ Данные потеряны. Начни заново.", reply_markup=None)
+        return
+
+    amount = Decimal(pending_amount_str)
     user_id = None
 
     with SessionLocal() as db:
-        user = _find_user(db, str(message.from_user.id)) if message.from_user else None
+        user = _find_user(db, str(callback.from_user.id)) if callback.from_user else None
         if user:
             user_id = user.id
 
         acc = db.query(Account).filter(Account.id == uuid.UUID(account_id)).first()
         if not acc:
             await state.clear()
-            await message.answer("⚠️ Счёт не найден.")
+            await callback.message.edit_text("⚠️ Счёт не найден.", reply_markup=None)
             return
 
-        # Find previous snapshot for delta
         prev = _latest_snapshot(db, acc.id)
+        prev_amount = Decimal(str(prev.actual_balance)) if prev else None
 
         snapshot = BalanceSnapshot(
             id=uuid.uuid4(),
@@ -237,14 +285,13 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
         )
         db.add(snapshot)
 
-        # Log delta as a categorized transaction
-        prev_amount = prev.actual_balance if prev else None
+        delta_tx = None
         if prev_amount is not None:
             delta = amount - prev_amount
             if delta != 0:
                 from datetime import datetime, timezone as tz
                 direction = TransactionDirection.INCOME if delta > 0 else TransactionDirection.EXPENSE
-                tx = Transaction(
+                delta_tx = Transaction(
                     id=uuid.uuid4(),
                     household_id=acc.household_id,
                     user_id=user_id,
@@ -255,15 +302,15 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
                     occurred_at=datetime.now(tz.utc),
                     merchant_raw=f"Корректировка: {acc.name}",
                     source="telegram",
-                    parse_status="ok",
+                    parse_status="needs_correction",
                     primary_tag="корректировка",
                     extra_tags=[],
+                    is_planned=False,
+                    is_skipped=False,
                 )
-                db.add(tx)
+                db.add(delta_tx)
 
         db.commit()
-
-        acc_name = acc.name
         acc_currency = acc.currency.value
 
     await state.clear()
@@ -281,9 +328,64 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
         ]
     else:
         lines.append(f"Баланс: {amount}")
-    lines += ["", "Сохранено."]
+    lines += ["", "Сохранено ✅"]
 
-    await message.answer("\n".join(lines))
+    await callback.message.edit_text("\n".join(lines), reply_markup=None)
+
+
+@router.callback_query(lambda c: c.data == _CB_RECONCILE_CANCEL)
+async def on_reconcile_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text("Отменено. Баланс не изменён.", reply_markup=None)
+    # Re-send balances overview
+    telegram_id = str(callback.from_user.id) if callback.from_user else ""
+    await send_balances(callback.message, telegram_id)
+
+
+# ─── History: running balance ─────────────────────────────────────────────────
+
+@router.callback_query(lambda c: c.data and c.data.startswith(_CB_HISTORY))
+async def on_account_history(callback: CallbackQuery) -> None:
+    await callback.answer()
+    account_id = callback.data[len(_CB_HISTORY):]
+
+    with SessionLocal() as db:
+        acc = db.query(Account).filter(Account.id == uuid.UUID(account_id)).first()
+        if not acc:
+            await callback.message.answer("⚠️ Счёт не найден.")
+            return
+
+        result = FinanceService(db).get_account_history(account_id)
+
+    acc_name = acc.name
+    cur = acc.currency.value
+
+    if result["warning"] == "no_snapshot":
+        await callback.message.answer(
+            f"📋 {acc_name} — История\n\nНет снапшота — сначала сделай сверку (🔄 Сверить)."
+        )
+        return
+
+    txns = result["transactions"]
+    snap = result["snapshot"]
+
+    lines = [f"📋 {acc_name} — История\n"]
+
+    if not txns:
+        lines.append("Транзакций после последней сверки нет.")
+    else:
+        for row in txns:
+            sign = "+" if row["direction"] == "income" else "-"
+            merchant = row["merchant"][:15].ljust(15)
+            amount_str = f"{sign}{row['amount']}"
+            running_str = f"{row['running_balance']}"
+            lines.append(
+                f"{row['date']}  {merchant}  {amount_str} {cur}  → {running_str} {cur}"
+            )
+
+    lines.append(f"\nСнапшот от {snap['date']}: {snap['amount']} {cur}")
+    await callback.message.answer("\n".join(lines))
 
 
 # ─── Add new account ──────────────────────────────────────────────────────────

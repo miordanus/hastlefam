@@ -274,7 +274,7 @@ class FinanceService:
         return tx
 
     def upcoming_transactions(self, household_id: str) -> list[dict[str, Any]]:
-        """All transactions with occurred_at > today (future-dated entries = planned activity)."""
+        """Planned transactions not yet skipped: is_planned=True, is_skipped=False, occurred_at > now."""
         today = datetime.now(timezone.utc).date()
         tomorrow_dt = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(days=1)
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
@@ -283,6 +283,8 @@ class FinanceService:
             self.db.query(Transaction)
             .filter(
                 Transaction.household_id == hid,
+                Transaction.is_planned.is_(True),
+                Transaction.is_skipped.is_(False),
                 Transaction.occurred_at >= tomorrow_dt,
                 Transaction.direction != TransactionDirection.TRANSFER,
                 Transaction.direction != TransactionDirection.EXCHANGE,
@@ -410,6 +412,75 @@ class FinanceService:
 
         self.db.commit()
         return snapshot, delta_tx
+
+    # ─── Account transaction history (running balance) ───────────────────────
+
+    def get_account_history(self, account_id: str, limit: int = 10) -> dict[str, Any]:
+        """Return last `limit` actual transactions after the latest BalanceSnapshot,
+        with a running balance computed from the snapshot amount.
+
+        Returns:
+            {
+              "snapshot": {"amount": Decimal, "date": str} | None,
+              "transactions": [{"date": str, "merchant": str, "amount": Decimal,
+                                "direction": str, "currency": str, "running_balance": Decimal}],
+              "warning": str | None,
+            }
+        """
+        aid = _uuid.UUID(account_id) if isinstance(account_id, str) else account_id
+
+        snapshot = (
+            self.db.query(BalanceSnapshot)
+            .filter(BalanceSnapshot.account_id == aid)
+            .order_by(BalanceSnapshot.created_at.desc())
+            .first()
+        )
+        if snapshot is None:
+            return {"snapshot": None, "transactions": [], "warning": "no_snapshot"}
+
+        snap_amount = Decimal(str(snapshot.actual_balance))
+        snap_date = snapshot.created_at
+
+        txns = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.account_id == aid,
+                Transaction.is_planned.is_(False),
+                Transaction.is_skipped.is_(False),
+                Transaction.occurred_at > snap_date,
+            )
+            .order_by(Transaction.occurred_at.asc())
+            .all()
+        )
+
+        running = snap_amount
+        rows = []
+        for tx in txns:
+            amount = Decimal(str(tx.amount))
+            direction = tx.direction.value if tx.direction else "expense"
+            if direction == "income":
+                running += amount
+            elif direction == "expense":
+                running -= amount
+            rows.append({
+                "date": tx.occurred_at.strftime("%d.%m"),
+                "merchant": tx.merchant_raw or "—",
+                "amount": amount,
+                "direction": direction,
+                "currency": tx.currency.value if tx.currency else "RUB",
+                "running_balance": running,
+            })
+
+        # Return last `limit` rows
+        rows = rows[-limit:]
+        return {
+            "snapshot": {
+                "amount": snap_amount,
+                "date": snap_date.strftime("%d.%m"),
+            },
+            "transactions": rows,
+            "warning": None,
+        }
 
     # ─── Balance summary for /month ──────────────────────────────────────────
 

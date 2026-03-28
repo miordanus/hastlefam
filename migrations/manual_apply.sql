@@ -683,3 +683,32 @@ CREATE INDEX IF NOT EXISTS ix_debts_household_id ON hastlefam.debts(household_id
 CREATE INDEX IF NOT EXISTS ix_debts_settled_at ON hastlefam.debts(settled_at);
 
 COMMIT;
+
+-- =============================================================================
+-- Migration 0017: is_skipped on transactions
+-- Allows upcoming planned transactions to be skipped (hidden from /upcoming).
+-- =============================================================================
+BEGIN;
+
+ALTER TABLE hastlefam.transactions
+  ADD COLUMN IF NOT EXISTS is_skipped BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS ix_transactions_is_skipped
+  ON hastlefam.transactions(is_skipped);
+
+COMMIT;
+
+-- =============================================================================
+-- Migration 0018: budget rollover fields
+-- rollover_enabled: carry unused budget to next month.
+-- rollover_amount:  the carried amount (set by apply_rollover logic).
+-- =============================================================================
+BEGIN;
+
+ALTER TABLE hastlefam.category_budgets
+  ADD COLUMN IF NOT EXISTS rollover_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE hastlefam.category_budgets
+  ADD COLUMN IF NOT EXISTS rollover_amount NUMERIC(14,2) NOT NULL DEFAULT 0;
+
+COMMIT;

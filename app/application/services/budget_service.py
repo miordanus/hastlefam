@@ -22,6 +22,102 @@ log = logging.getLogger(__name__)
 _ALERT_THRESHOLDS = [80, 100]  # percent
 
 
+def apply_rollover(
+    household_id: str,
+    month_key: str,
+    session: Session,
+) -> None:
+    """Carry unused budget from previous month to current month for rollover-enabled budgets.
+
+    For each budget with rollover_enabled=True in the previous month:
+    - If remainder (limit - actual_spent) > 0: set current month's rollover_amount = remainder
+    - If remainder <= 0: rollover_amount = 0 (overspend is not carried)
+    Only runs if the current month has budgets without rollover_amount already set.
+    """
+    hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+    try:
+        year, month = int(month_key[:4]), int(month_key[5:7])
+    except (ValueError, IndexError):
+        return
+
+    # Compute prev month key
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
+    prev_month_key = f"{prev_year}-{prev_month:02d}"
+
+    import calendar
+    prev_month_start = datetime(prev_year, prev_month, 1, tzinfo=timezone.utc)
+    prev_last_day = calendar.monthrange(prev_year, prev_month)[1]
+    prev_month_end = datetime(prev_year, prev_month, prev_last_day, 23, 59, 59, tzinfo=timezone.utc)
+
+    prev_budgets = (
+        session.query(CategoryBudget)
+        .filter(
+            CategoryBudget.household_id == hid,
+            CategoryBudget.month_key == prev_month_key,
+            CategoryBudget.rollover_enabled.is_(True),
+        )
+        .all()
+    )
+
+    for prev_budget in prev_budgets:
+        # Compute actual_spent for prev month
+        category_name: str = "Без категории"
+        if prev_budget.category_id:
+            cat = session.get(FinanceCategory, prev_budget.category_id)
+            if cat:
+                category_name = cat.name
+
+        actual_rows = (
+            session.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.occurred_at >= prev_month_start,
+                Transaction.occurred_at <= prev_month_end,
+                Transaction.direction == TransactionDirection.EXPENSE,
+                Transaction.is_planned == False,  # noqa: E712
+                Transaction.primary_tag == category_name.lower(),
+            )
+            .all()
+        )
+        actual_spent = sum(Decimal(str(tx.amount)) for tx in actual_rows)
+        prev_limit = Decimal(str(prev_budget.limit_amount))
+        remainder = prev_limit - actual_spent
+
+        rollover_amount = max(Decimal("0"), remainder)
+
+        # Find or create current month budget for same category
+        curr_budget = (
+            session.query(CategoryBudget)
+            .filter(
+                CategoryBudget.household_id == hid,
+                CategoryBudget.month_key == month_key,
+                CategoryBudget.category_id == prev_budget.category_id,
+            )
+            .first()
+        )
+        if curr_budget is None:
+            # Create matching budget
+            curr_budget = CategoryBudget(
+                household_id=hid,
+                month_key=month_key,
+                category_id=prev_budget.category_id,
+                limit_amount=prev_budget.limit_amount,
+                currency=prev_budget.currency,
+                rollover_enabled=True,
+                rollover_amount=rollover_amount,
+            )
+            session.add(curr_budget)
+        else:
+            curr_budget.rollover_amount = rollover_amount
+
+    if prev_budgets:
+        session.commit()
+
+
 def get_budget_status(
     household_id: str,
     month_key: str,
@@ -32,14 +128,23 @@ def get_budget_status(
     Each entry contains:
       - category_name: str
       - limit_amount: Decimal
+      - rollover_amount: Decimal
+      - effective_limit: Decimal  (limit + rollover)
       - currency: str
       - actual_spent: Decimal   (is_planned=False)
       - planned_amount: Decimal (is_planned=True AND occurred_at > now())
       - remaining_after_planned: Decimal
-      - pct_used: float  (actual / limit * 100)
+      - pct_used: float  (actual / effective_limit * 100)
       - status: 'ok' | 'at_risk' | 'over_budget'
+      - rollover_enabled: bool
     """
     hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+    # Apply rollover for current month before computing status
+    from datetime import date
+    current_month_key = date.today().strftime("%Y-%m")
+    if month_key == current_month_key:
+        apply_rollover(household_id, month_key, session)
 
     # Parse month_key into date range
     try:
@@ -105,8 +210,10 @@ def get_budget_status(
         planned_amount = sum(Decimal(str(tx.amount)) for tx in planned_rows)
 
         limit = Decimal(str(budget.limit_amount))
-        remaining = limit - actual_spent - planned_amount
-        pct_used = float(actual_spent / limit * 100) if limit > 0 else 0.0
+        rollover = Decimal(str(budget.rollover_amount)) if budget.rollover_amount else Decimal("0")
+        effective_limit = limit + rollover
+        remaining = effective_limit - actual_spent - planned_amount
+        pct_used = float(actual_spent / effective_limit * 100) if effective_limit > 0 else 0.0
 
         if pct_used >= 100:
             status = "over_budget"
@@ -119,6 +226,9 @@ def get_budget_status(
             "budget_id": str(budget.id),
             "category_name": category_name,
             "limit_amount": limit,
+            "rollover_amount": rollover,
+            "effective_limit": effective_limit,
+            "rollover_enabled": bool(budget.rollover_enabled),
             "currency": budget.currency,
             "actual_spent": actual_spent,
             "planned_amount": planned_amount,
@@ -147,7 +257,7 @@ async def check_and_alert(
     for s in statuses:
         pct = s["pct_used"]
         name = s["category_name"]
-        limit = s["limit_amount"]
+        limit = s["effective_limit"]
         actual = s["actual_spent"]
         cur = s["currency"]
 

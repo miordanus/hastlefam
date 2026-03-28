@@ -304,6 +304,7 @@ def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboard
         ))
     row1.append(InlineKeyboardButton(text="📊 Бюджеты", callback_data="month:open_budgets"))
     row1.append(InlineKeyboardButton(text="📅 План", callback_data="month:open_upcoming"))
+    row1.append(InlineKeyboardButton(text="📊 Год", callback_data=f"month:year:{for_date.year}"))
     rows.append(row1)
 
     # Row 2: Разобрать (only if untagged)
@@ -576,3 +577,105 @@ async def on_month_insights(callback: CallbackQuery) -> None:
         )
 
     await callback.message.answer(f"\U0001f4ca \u0418\u043d\u0441\u0430\u0439\u0442\u044b \u0437\u0430 {_MONTH_RU[for_date.month]} {for_date.year}:\n\n{text}")
+
+
+# ─── Annual P&L ───────────────────────────────────────────────────────────────
+
+_MONTH_RU_SHORT = {
+    1: "Янв", 2: "Фев", 3: "Мар", 4: "Апр",
+    5: "Май", 6: "Июн", 7: "Июл", 8: "Авг",
+    9: "Сен", 10: "Окт", 11: "Ноя", 12: "Дек",
+}
+
+_BAR_FILLED = "█"
+_BAR_EMPTY = "░"
+_BAR_MAX_LEN = 6
+
+
+def _ascii_bar(amount: Decimal, max_amount: Decimal) -> str:
+    if max_amount <= 0:
+        return _BAR_EMPTY * _BAR_MAX_LEN
+    filled = round(float(amount / max_amount) * _BAR_MAX_LEN)
+    filled = max(0, min(_BAR_MAX_LEN, filled))
+    return _BAR_FILLED * filled + _BAR_EMPTY * (_BAR_MAX_LEN - filled)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("month:year:"))
+async def on_month_year(callback: CallbackQuery) -> None:
+    await callback.answer()
+    year_str = callback.data[len("month:year:"):]
+    try:
+        year = int(year_str)
+    except ValueError:
+        return
+
+    today = date.today()
+
+    with SessionLocal() as db:
+        user = _find_user(db, str(callback.from_user.id)) if callback.from_user else None
+        if not user:
+            return
+
+        svc = FinanceService(db)
+        monthly_amounts: list[Decimal] = []
+
+        for month in range(1, 13):
+            for_date_m = date(year, month, 1)
+            try:
+                summary = svc.month_summary(str(user.household_id), for_date=for_date_m)
+                spend_by_cur = summary.get("spend_by_currency", {})
+                # Convert all currencies to RUB
+                import calendar as _cal
+                last_day = _cal.monthrange(year, month)[1]
+                rate_date = date(year, month, last_day)
+                total_rub = Decimal("0")
+                all_ok = True
+                for cur, amt in spend_by_cur.items():
+                    converted = convert_to_rub(amt, cur, rate_date, db)
+                    if converted is None:
+                        all_ok = False
+                        total_rub += amt  # use native amount as fallback
+                    else:
+                        total_rub += converted
+                monthly_amounts.append(total_rub)
+            except Exception:
+                monthly_amounts.append(Decimal("0"))
+
+    # Build ASCII chart
+    max_amount = max(monthly_amounts) if monthly_amounts else Decimal("0")
+    lines = [f"📊 {year} — расходы по месяцам (RUB):\n"]
+
+    amounts_nonzero = [a for a in monthly_amounts if a > 0]
+    avg_amount = sum(amounts_nonzero) / len(amounts_nonzero) if amounts_nonzero else Decimal("0")
+
+    for month in range(1, 13):
+        idx = month - 1
+        amount = monthly_amounts[idx]
+        bar = _ascii_bar(amount, max_amount)
+        month_short = _MONTH_RU_SHORT[month]
+        amount_str = _fmt_amount(amount) if amount > 0 else "0"
+        suffix = ""
+        if year == today.year and month == today.month:
+            suffix = " ← текущий (неполный)"
+        lines.append(f"{month_short}  {bar}  {amount_str:>8}{suffix}")
+
+    # Top-3 worst months and best month
+    indexed = sorted(enumerate(monthly_amounts, 1), key=lambda x: x[1], reverse=True)
+    worst_3 = [(m, a) for m, a in indexed[:3] if a > 0]
+    best = min(((m, a) for m, a in enumerate(monthly_amounts, 1) if a > 0), key=lambda x: x[1], default=None)
+
+    if worst_3 or best:
+        lines.append("")
+        if worst_3:
+            worst_parts = []
+            for m, a in worst_3:
+                if avg_amount > 0 and a > avg_amount:
+                    pct = int((a - avg_amount) / avg_amount * 100)
+                    worst_parts.append(f"{_MONTH_RU_SHORT[m]} (+{pct}%)")
+                else:
+                    worst_parts.append(_MONTH_RU_SHORT[m])
+            lines.append(f"Худшие: {', '.join(worst_parts)}")
+        if best:
+            lines.append(f"Лучший: {_MONTH_RU_SHORT[best[0]]}")
+
+    await callback.message.answer("\n".join(lines))
