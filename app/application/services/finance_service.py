@@ -416,8 +416,11 @@ class FinanceService:
     # ─── Account transaction history (running balance) ───────────────────────
 
     def get_account_history(self, account_id: str, limit: int = 10) -> dict[str, Any]:
-        """Return last `limit` actual transactions after the latest BalanceSnapshot,
-        with a running balance computed from the snapshot amount.
+        """Return last `limit` actual transactions with a running balance.
+
+        If no snapshot exists: running_start=0, fetches all transactions for the account.
+        If no transactions are linked by account_id: falls back to household transactions
+        for the last 30 days (temporary until account_id backfill is complete).
 
         Returns:
             {
@@ -429,29 +432,59 @@ class FinanceService:
         """
         aid = _uuid.UUID(account_id) if isinstance(account_id, str) else account_id
 
+        account = self.db.query(Account).filter(Account.id == aid).first()
+
         snapshot = (
             self.db.query(BalanceSnapshot)
             .filter(BalanceSnapshot.account_id == aid)
             .order_by(BalanceSnapshot.created_at.desc())
             .first()
         )
+
+        warning: str | None = None
         if snapshot is None:
-            return {"snapshot": None, "transactions": [], "warning": "no_snapshot"}
-
-        snap_amount = Decimal(str(snapshot.actual_balance))
-        snap_date = snapshot.created_at
-
-        txns = (
-            self.db.query(Transaction)
-            .filter(
-                Transaction.account_id == aid,
-                Transaction.is_planned.is_(False),
-                Transaction.is_skipped.is_(False),
-                Transaction.occurred_at > snap_date,
+            snap_amount = Decimal("0")
+            warning = "no_snapshot"
+            # Fetch all transactions linked to this account
+            txns = (
+                self.db.query(Transaction)
+                .filter(
+                    Transaction.account_id == aid,
+                    Transaction.is_planned.is_(False),
+                    Transaction.is_skipped.is_(False),
+                )
+                .order_by(Transaction.occurred_at.asc())
+                .all()
             )
-            .order_by(Transaction.occurred_at.asc())
-            .all()
-        )
+            # Fallback: if account_id not backfilled, use household transactions (last 30 days)
+            if not txns and account is not None:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                txns = (
+                    self.db.query(Transaction)
+                    .filter(
+                        Transaction.household_id == account.household_id,
+                        Transaction.is_planned.is_(False),
+                        Transaction.is_skipped.is_(False),
+                        Transaction.occurred_at >= cutoff,
+                    )
+                    .order_by(Transaction.occurred_at.asc())
+                    .all()
+                )
+                if txns:
+                    warning = "no_snapshot_household_fallback"
+        else:
+            snap_amount = Decimal(str(snapshot.actual_balance))
+            txns = (
+                self.db.query(Transaction)
+                .filter(
+                    Transaction.account_id == aid,
+                    Transaction.is_planned.is_(False),
+                    Transaction.is_skipped.is_(False),
+                    Transaction.occurred_at > snapshot.created_at,
+                )
+                .order_by(Transaction.occurred_at.asc())
+                .all()
+            )
 
         running = snap_amount
         rows = []
@@ -476,10 +509,10 @@ class FinanceService:
         return {
             "snapshot": {
                 "amount": snap_amount,
-                "date": snap_date.strftime("%d.%m"),
-            },
+                "date": snapshot.created_at.strftime("%d.%m"),
+            } if snapshot else None,
             "transactions": rows,
-            "warning": None,
+            "warning": warning,
         }
 
     # ─── Balance summary for /month ──────────────────────────────────────────

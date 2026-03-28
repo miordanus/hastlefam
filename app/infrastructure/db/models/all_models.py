@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -382,6 +382,24 @@ class CategoryBudget(Base):
     household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
     month_key: Mapped[str] = mapped_column(String(7), nullable=False)  # '2026-03'
     category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("finance_categories.id"))
+    limit_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="RUB")
+    rollover_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    rollover_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class TagBudget(Base):
+    """Monthly budget limit per tag per household."""
+    __tablename__ = "tag_budgets"
+    __table_args__ = (
+        Index("ix_tag_budgets_household_month", "household_id", "month_key"),
+        UniqueConstraint("household_id", "month_key", "tag", name="uq_tag_budgets_household_month_tag"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    month_key: Mapped[str] = mapped_column(String(7), nullable=False)  # '2026-03'
+    tag: Mapped[str] = mapped_column(String(255), nullable=False)
     limit_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="RUB")
     rollover_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

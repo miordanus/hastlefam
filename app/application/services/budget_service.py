@@ -1,4 +1,4 @@
-"""budget_service.py — Category budget tracking and alerting.
+"""budget_service.py — Tag budget tracking and alerting.
 
 ЗАКОН: actual_spent фильтрует is_planned=False.
        planned_amount фильтрует is_planned=True AND occurred_at > now().
@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.domain.enums import TransactionDirection
-from app.infrastructure.db.models import CategoryBudget, FinanceCategory, Transaction
+from app.infrastructure.db.models import TagBudget, Transaction
 
 log = logging.getLogger(__name__)
 
@@ -27,12 +27,11 @@ def apply_rollover(
     month_key: str,
     session: Session,
 ) -> None:
-    """Carry unused budget from previous month to current month for rollover-enabled budgets.
+    """Carry unused budget from previous month to current month for rollover-enabled TagBudgets.
 
     For each budget with rollover_enabled=True in the previous month:
     - If remainder (limit - actual_spent) > 0: set current month's rollover_amount = remainder
     - If remainder <= 0: rollover_amount = 0 (overspend is not carried)
-    Only runs if the current month has budgets without rollover_amount already set.
     """
     hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
 
@@ -54,23 +53,16 @@ def apply_rollover(
     prev_month_end = datetime(prev_year, prev_month, prev_last_day, 23, 59, 59, tzinfo=timezone.utc)
 
     prev_budgets = (
-        session.query(CategoryBudget)
+        session.query(TagBudget)
         .filter(
-            CategoryBudget.household_id == hid,
-            CategoryBudget.month_key == prev_month_key,
-            CategoryBudget.rollover_enabled.is_(True),
+            TagBudget.household_id == hid,
+            TagBudget.month_key == prev_month_key,
+            TagBudget.rollover_enabled.is_(True),
         )
         .all()
     )
 
     for prev_budget in prev_budgets:
-        # Compute actual_spent for prev month
-        category_name: str = "Без категории"
-        if prev_budget.category_id:
-            cat = session.get(FinanceCategory, prev_budget.category_id)
-            if cat:
-                category_name = cat.name
-
         actual_rows = (
             session.query(Transaction)
             .filter(
@@ -79,32 +71,31 @@ def apply_rollover(
                 Transaction.occurred_at <= prev_month_end,
                 Transaction.direction == TransactionDirection.EXPENSE,
                 Transaction.is_planned == False,  # noqa: E712
-                Transaction.primary_tag == category_name.lower(),
+                Transaction.is_skipped == False,  # noqa: E712
+                Transaction.primary_tag == prev_budget.tag,
             )
             .all()
         )
         actual_spent = sum(Decimal(str(tx.amount)) for tx in actual_rows)
         prev_limit = Decimal(str(prev_budget.limit_amount))
         remainder = prev_limit - actual_spent
-
         rollover_amount = max(Decimal("0"), remainder)
 
-        # Find or create current month budget for same category
+        # Find or create current month budget for same tag
         curr_budget = (
-            session.query(CategoryBudget)
+            session.query(TagBudget)
             .filter(
-                CategoryBudget.household_id == hid,
-                CategoryBudget.month_key == month_key,
-                CategoryBudget.category_id == prev_budget.category_id,
+                TagBudget.household_id == hid,
+                TagBudget.month_key == month_key,
+                TagBudget.tag == prev_budget.tag,
             )
             .first()
         )
         if curr_budget is None:
-            # Create matching budget
-            curr_budget = CategoryBudget(
+            curr_budget = TagBudget(
                 household_id=hid,
                 month_key=month_key,
-                category_id=prev_budget.category_id,
+                tag=prev_budget.tag,
                 limit_amount=prev_budget.limit_amount,
                 currency=prev_budget.currency,
                 rollover_enabled=True,
@@ -123,15 +114,17 @@ def get_budget_status(
     month_key: str,
     session: Session,
 ) -> list[dict[str, Any]]:
-    """Return per-category budget status for the given month_key (e.g. '2026-03').
+    """Return per-tag budget status for the given month_key (e.g. '2026-03').
 
     Each entry contains:
-      - category_name: str
+      - category_name: str  (= tag, kept for backward compat with month.py)
+      - tag: str
+      - budget_id: str
       - limit_amount: Decimal
       - rollover_amount: Decimal
       - effective_limit: Decimal  (limit + rollover)
       - currency: str
-      - actual_spent: Decimal   (is_planned=False)
+      - actual_spent: Decimal   (is_planned=False, is_skipped=False)
       - planned_amount: Decimal (is_planned=True AND occurred_at > now())
       - remaining_after_planned: Decimal
       - pct_used: float  (actual / effective_limit * 100)
@@ -159,26 +152,19 @@ def get_budget_status(
     now = datetime.now(timezone.utc)
 
     budgets = (
-        session.query(CategoryBudget)
+        session.query(TagBudget)
         .filter(
-            CategoryBudget.household_id == hid,
-            CategoryBudget.month_key == month_key,
+            TagBudget.household_id == hid,
+            TagBudget.month_key == month_key,
         )
         .all()
     )
 
     result = []
     for budget in budgets:
-        # Resolve category name
-        category_name: str = month_key  # fallback
-        if budget.category_id:
-            cat = session.get(FinanceCategory, budget.category_id)
-            if cat:
-                category_name = cat.name
-        else:
-            category_name = "Без категории"
+        tag = budget.tag
 
-        # actual_spent: is_planned=False, direction=EXPENSE, tag matches category name
+        # actual_spent: is_planned=False, is_skipped=False, direction=EXPENSE, tag matches
         actual_rows = (
             session.query(Transaction)
             .filter(
@@ -187,13 +173,14 @@ def get_budget_status(
                 Transaction.occurred_at <= month_end,
                 Transaction.direction == TransactionDirection.EXPENSE,
                 Transaction.is_planned == False,  # noqa: E712
-                Transaction.primary_tag == category_name.lower(),
+                Transaction.is_skipped == False,  # noqa: E712
+                Transaction.primary_tag == tag,
             )
             .all()
         )
         actual_spent = sum(Decimal(str(tx.amount)) for tx in actual_rows)
 
-        # planned_amount: is_planned=True, occurred_at > now
+        # planned_amount: is_planned=True, occurred_at > now, tag matches
         planned_rows = (
             session.query(Transaction)
             .filter(
@@ -203,7 +190,8 @@ def get_budget_status(
                 Transaction.occurred_at > now,
                 Transaction.direction == TransactionDirection.EXPENSE,
                 Transaction.is_planned == True,  # noqa: E712
-                Transaction.primary_tag == category_name.lower(),
+                Transaction.is_skipped == False,  # noqa: E712
+                Transaction.primary_tag == tag,
             )
             .all()
         )
@@ -224,7 +212,8 @@ def get_budget_status(
 
         result.append({
             "budget_id": str(budget.id),
-            "category_name": category_name,
+            "category_name": tag,  # backward compat with month.py display
+            "tag": tag,
             "limit_amount": limit,
             "rollover_amount": rollover,
             "effective_limit": effective_limit,
@@ -256,7 +245,7 @@ async def check_and_alert(
 
     for s in statuses:
         pct = s["pct_used"]
-        name = s["category_name"]
+        name = s["tag"]
         limit = s["effective_limit"]
         actual = s["actual_spent"]
         cur = s["currency"]
@@ -266,7 +255,7 @@ async def check_and_alert(
                 overage = actual - limit
                 await bot.send_message(
                     chat_id,
-                    f"🔴 Перерасход в категории «{name}»: "
+                    f"🔴 Перерасход по тегу «{name}»: "
                     f"{_fmt(actual)} {cur} / лимит {_fmt(limit)} {cur} "
                     f"(+{_fmt(overage)} {cur})",
                 )
@@ -274,7 +263,7 @@ async def check_and_alert(
                 remaining = limit - actual
                 await bot.send_message(
                     chat_id,
-                    f"⚠️ Категория «{name}» на {pct:.0f}% от лимита. "
+                    f"⚠️ Тег «{name}» на {pct:.0f}% от лимита. "
                     f"Осталось {_fmt(remaining)} {cur}.",
                 )
         except Exception as exc:

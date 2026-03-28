@@ -136,6 +136,7 @@ def parse(text: str) -> ParseResult:
     # ── Extract tags ────────────────────────────────────────────────────────
     tags = _TAG_RE.findall(working)
     working_no_tags = _TAG_RE.sub("", working).strip()
+    # теги всегда lowercase — иначе TagBudget не сматчится
     primary_tag = tags[0].lower() if tags else None
     extra_tags = [t.lower() for t in tags[1:]]
 
