@@ -426,9 +426,10 @@ def _render_month(
     # ── Assemble ──────────────────────────────────────────────────────────
     sep = "──────────────────"
     lines: list[str] = [f"<b>{month_label}</b>", ""]
-    lines += [balance_line, spend_line, income_line]
+    lines.append(balance_line)
     if grand_total_rub:
-        lines.append(grand_total_rub)
+        lines.append(f"             {grand_total_rub}")
+    lines += [spend_line, income_line]
     lines += plan_lines
     if budget_lines:
         lines += [sep] + budget_lines
@@ -455,19 +456,27 @@ def _fetch_and_render(db, user, for_date: date) -> tuple[str, InlineKeyboardMark
     except Exception:
         pass
 
-    # Grand total spend in RUB (best-effort; None if no FX rates available)
+    # Balance in RUB = income_RUB − spend_RUB (best-effort; None if no FX rates available)
     grand_total_rub: str | None = None
     try:
-        total = Decimal("0")
+        total_income_rub = Decimal("0")
+        total_spend_rub = Decimal("0")
         all_ok = True
-        for cur, amt in summary["spend_by_currency"].items():
-            converted = convert_to_rub(amt, cur, for_date, db)
-            if converted is None:
+        all_curs = set(summary["spend_by_currency"]) | set(summary["income_by_currency"])
+        for cur in all_curs:
+            s_amt = summary["spend_by_currency"].get(cur, Decimal("0"))
+            i_amt = summary["income_by_currency"].get(cur, Decimal("0"))
+            sc = convert_to_rub(s_amt, cur, for_date, db)
+            ic = convert_to_rub(i_amt, cur, for_date, db)
+            if sc is None or ic is None:
                 all_ok = False
                 break
-            total += converted
-        if summary["spend_by_currency"]:
-            grand_total_rub = f"≈ {_fmt_amount(total)} RUB" if all_ok else "≈ ~ RUB"
+            total_spend_rub += sc
+            total_income_rub += ic
+        if all_curs:
+            balance_rub = total_income_rub - total_spend_rub
+            prefix = "+" if balance_rub >= 0 else ""
+            grand_total_rub = f"≈ {prefix}{_fmt_amount(balance_rub)} RUB" if all_ok else "≈ ~ RUB"
     except Exception:
         pass
 

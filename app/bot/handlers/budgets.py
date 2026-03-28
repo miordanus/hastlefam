@@ -1,6 +1,6 @@
-"""/budgets — Monthly category budget overview with limit management.
+"""/budgets — Monthly tag budget overview with limit management.
 
-Shows per-category: actual spent, planned, limit (+rollover), remaining, status.
+Shows per-tag: actual spent, planned, limit (+rollover), remaining, status.
 Inline buttons: ✏️ Лимит (FSM), 📋 Транзакции (last 5), ↩️ Переносить (toggle rollover).
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.services.budget_service import _fmt, get_budget_status
-from app.infrastructure.db.models import CategoryBudget, FinanceCategory, Transaction, User
+from app.infrastructure.db.models import TagBudget, Transaction, User
 from app.infrastructure.db.session import SessionLocal
 
 router = Router()
@@ -29,7 +29,7 @@ _CB_TOGGLE_ROLLOVER = "budget_rollover:"
 
 
 class BudgetStates(StatesGroup):
-    waiting_category = State()
+    waiting_tag = State()
     waiting_limit = State()
 
 
@@ -52,11 +52,11 @@ def _build_budgets_text(statuses: list, month_key: str) -> str:
     lines = [f"📊 <b>Бюджеты — {month_name} {year}</b>\n"]
 
     if not statuses:
-        lines.append("Лимиты не заданы. Нажми ✏️ Новый лимит чтобы добавить.")
+        lines.append("Лимиты не заданы. Нажми ➕ Добавить чтобы задать лимит по тегу.")
     else:
         for s in statuses:
             emoji = _status_emoji(s["status"])
-            name = s["category_name"]
+            tag = s["tag"]
             actual = _fmt(s["actual_spent"])
             limit = _fmt(s["limit_amount"])
             cur = s["currency"]
@@ -70,14 +70,14 @@ def _build_budgets_text(statuses: list, month_key: str) -> str:
 
             if planned > 0:
                 line = (
-                    f"{emoji} <b>{name}</b>  "
+                    f"{emoji} <b>{tag}</b>  "
                     f"{actual} + {_fmt(planned)} план / {limit}{rollover_suffix} {cur}  "
                     f"осталось {_fmt(remaining)} {cur}"
                 )
             else:
                 sign = "+" if remaining >= 0 else ""
                 line = (
-                    f"{emoji} <b>{name}</b>  "
+                    f"{emoji} <b>{tag}</b>  "
                     f"{actual} / {limit}{rollover_suffix} {cur}  "
                     f"осталось {sign}{_fmt(remaining)} {cur}"
                 )
@@ -91,19 +91,19 @@ def _build_budgets_keyboard(statuses: list, month_key: str) -> InlineKeyboardMar
 
     for s in statuses:
         budget_id = s["budget_id"]
-        name = s["category_name"]
+        tag = s["tag"]
         rollover_enabled = s.get("rollover_enabled", False)
         rollover_label = "↩️ Не переносить" if rollover_enabled else "↩️ Переносить"
 
         rows.append([
-            InlineKeyboardButton(text=f"✏️ {name}: лимит", callback_data=f"{_CB_SET_LIMIT}{budget_id}"),
+            InlineKeyboardButton(text=f"✏️ {tag}: лимит", callback_data=f"{_CB_SET_LIMIT}{budget_id}"),
             InlineKeyboardButton(text="📋 Транзакции", callback_data=f"{_CB_TRANSACTIONS}{budget_id}:{month_key}"),
         ])
         rows.append([
             InlineKeyboardButton(text=rollover_label, callback_data=f"{_CB_TOGGLE_ROLLOVER}{budget_id}:{month_key}"),
         ])
 
-    rows.append([InlineKeyboardButton(text="➕ Новый лимит", callback_data=f"budget_new:{month_key}")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data=f"budget_new:{month_key}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -134,18 +134,16 @@ async def cmd_budgets(message: Message):
 async def cb_set_limit(call: CallbackQuery, state: FSMContext):
     budget_id = call.data[len(_CB_SET_LIMIT):]
     await state.set_state(BudgetStates.waiting_limit)
-    await state.update_data(budget_id=budget_id, category_id=None, month_key=None, household_id=None)
+    await state.update_data(budget_id=budget_id, tag=None, month_key=None, household_id=None)
     await call.message.answer("Введи новый лимит (число в RUB):")
     await call.answer()
 
 
-# ─── New limit flow ───────────────────────────────────────────────────────────
+# ─── New budget flow ──────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("budget_new:"))
 async def cb_new_budget(call: CallbackQuery, state: FSMContext):
     month_key = call.data[len("budget_new:"):]
-    await state.set_state(BudgetStates.waiting_category)
-    await state.update_data(month_key=month_key)
 
     with SessionLocal() as db:
         user = _find_user(db, str(call.from_user.id)) if call.from_user else None
@@ -153,40 +151,26 @@ async def cb_new_budget(call: CallbackQuery, state: FSMContext):
             await call.message.answer("⚠️ Профиль не найден.")
             await call.answer()
             return
-        cats = (
-            db.query(FinanceCategory)
-            .filter(
-                (FinanceCategory.household_id == user.household_id) |
-                (FinanceCategory.household_id.is_(None))
-            )
-            .order_by(FinanceCategory.name)
-            .limit(20)
-            .all()
-        )
-        await state.update_data(household_id=str(user.household_id))
+        await state.update_data(month_key=month_key, household_id=str(user.household_id))
 
-    if not cats:
-        await call.message.answer("Категории не найдены. Добавь транзакции с тегами.")
-        await state.clear()
-        await call.answer()
+    await state.set_state(BudgetStates.waiting_tag)
+    await call.message.answer(
+        "Введи тег для бюджета (например: <code>еда</code> или <code>транспорт</code>).\n"
+        "Тег будет приведён к нижнему регистру.",
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.message(BudgetStates.waiting_tag)
+async def recv_tag(message: Message, state: FSMContext):
+    tag = (message.text or "").strip().lower()
+    if not tag or len(tag) < 1:
+        await message.answer("Введи непустой тег. Попробуй снова или /cancel.")
         return
-
-    buttons = [
-        [InlineKeyboardButton(text=c.name, callback_data=f"budget_cat:{c.id}")]
-        for c in cats
-    ]
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await call.message.answer("Выбери категорию для бюджета:", reply_markup=kb)
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("budget_cat:"))
-async def cb_budget_category(call: CallbackQuery, state: FSMContext):
-    cat_id = call.data[len("budget_cat:"):]
-    await state.update_data(category_id=cat_id)
+    await state.update_data(tag=tag)
     await state.set_state(BudgetStates.waiting_limit)
-    await call.message.answer("Введи лимит для этой категории (число в RUB):")
-    await call.answer()
+    await message.answer(f"Тег: <b>{tag}</b>\nТеперь введи лимит (число в RUB):", parse_mode="HTML")
 
 
 @router.message(BudgetStates.waiting_limit)
@@ -203,42 +187,42 @@ async def recv_limit(message: Message, state: FSMContext):
 
     data = await state.get_data()
     budget_id = data.get("budget_id")
-    category_id = data.get("category_id")
+    tag = data.get("tag")
     month_key = data.get("month_key")
     household_id = data.get("household_id")
     await state.clear()
 
     with SessionLocal() as db:
         if budget_id:
-            # Update existing
-            budget = db.get(CategoryBudget, uuid.UUID(budget_id))
+            # Update existing TagBudget
+            budget = db.get(TagBudget, uuid.UUID(budget_id))
             if budget:
                 budget.limit_amount = new_limit
                 db.commit()
             await message.answer(f"✅ Лимит обновлён: {_fmt(new_limit)} RUB")
-        elif category_id and month_key and household_id:
-            # Create new
+        elif tag and month_key and household_id:
+            # Create new TagBudget
             existing = (
-                db.query(CategoryBudget)
+                db.query(TagBudget)
                 .filter(
-                    CategoryBudget.household_id == uuid.UUID(household_id),
-                    CategoryBudget.month_key == month_key,
-                    CategoryBudget.category_id == uuid.UUID(category_id),
+                    TagBudget.household_id == uuid.UUID(household_id),
+                    TagBudget.month_key == month_key,
+                    TagBudget.tag == tag,
                 )
                 .first()
             )
             if existing:
                 existing.limit_amount = new_limit
             else:
-                db.add(CategoryBudget(
+                db.add(TagBudget(
                     household_id=uuid.UUID(household_id),
                     month_key=month_key,
-                    category_id=uuid.UUID(category_id),
+                    tag=tag,
                     limit_amount=new_limit,
                     currency="RUB",
                 ))
             db.commit()
-            await message.answer(f"✅ Бюджет создан: {_fmt(new_limit)} RUB")
+            await message.answer(f"✅ Бюджет создан: <b>{tag}</b> → {_fmt(new_limit)} RUB", parse_mode="HTML")
         else:
             await message.answer("⚠️ Не удалось сохранить. Попробуй снова.")
 
@@ -251,7 +235,7 @@ async def cb_toggle_rollover(call: CallbackQuery):
     budget_id, month_key = parts[0], parts[1]
 
     with SessionLocal() as db:
-        budget = db.get(CategoryBudget, uuid.UUID(budget_id))
+        budget = db.get(TagBudget, uuid.UUID(budget_id))
         if not budget:
             await call.answer("Бюджет не найден.")
             return
@@ -282,16 +266,12 @@ async def cb_budget_transactions(call: CallbackQuery):
             await call.answer("Профиль не найден.")
             return
 
-        budget = db.get(CategoryBudget, uuid.UUID(budget_id))
+        budget = db.get(TagBudget, uuid.UUID(budget_id))
         if not budget:
             await call.answer("Бюджет не найден.")
             return
 
-        cat_name = "Без категории"
-        if budget.category_id:
-            cat = db.get(FinanceCategory, budget.category_id)
-            if cat:
-                cat_name = cat.name
+        tag = budget.tag
 
         try:
             year, month = int(month_key[:4]), int(month_key[5:7])
@@ -311,7 +291,7 @@ async def cb_budget_transactions(call: CallbackQuery):
                 Transaction.household_id == user.household_id,
                 Transaction.occurred_at >= month_start,
                 Transaction.occurred_at <= month_end,
-                Transaction.primary_tag == cat_name.lower(),
+                Transaction.primary_tag == tag,
                 Transaction.is_planned == False,  # noqa: E712
             )
             .order_by(Transaction.occurred_at.desc())
@@ -320,11 +300,11 @@ async def cb_budget_transactions(call: CallbackQuery):
         )
 
     if not txns:
-        await call.message.answer(f"Нет транзакций в категории «{cat_name}».")
+        await call.message.answer(f"Нет транзакций по тегу «{tag}».")
         await call.answer()
         return
 
-    lines = [f"<b>Последние транзакции — {cat_name}:</b>"]
+    lines = [f"<b>Последние транзакции — {tag}:</b>"]
     for tx in txns:
         d = tx.occurred_at.strftime("%d.%m")
         cur = tx.currency.value if tx.currency else "RUB"

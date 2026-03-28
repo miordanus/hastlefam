@@ -712,3 +712,28 @@ ALTER TABLE hastlefam.category_budgets
   ADD COLUMN IF NOT EXISTS rollover_amount NUMERIC(14,2) NOT NULL DEFAULT 0;
 
 COMMIT;
+
+-- =============================================================================
+-- Migration 0019: tag_budgets table
+-- Tag-based budget limits per household per month.
+-- category_budgets is kept but no longer used by the application.
+-- =============================================================================
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS hastlefam.tag_budgets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES hastlefam.households(id),
+  month_key VARCHAR(7) NOT NULL,
+  tag VARCHAR(255) NOT NULL,
+  limit_amount NUMERIC(14,2) NOT NULL,
+  currency VARCHAR(10) NOT NULL DEFAULT 'RUB',
+  rollover_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  rollover_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(household_id, month_key, tag)
+);
+
+CREATE INDEX IF NOT EXISTS ix_tag_budgets_household_month
+  ON hastlefam.tag_budgets(household_id, month_key);
+
+COMMIT;
