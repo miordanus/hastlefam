@@ -302,7 +302,7 @@ def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboard
             text="💡 Инсайты",
             callback_data=f"month:insights:{for_date.isoformat()}",
         ))
-    row1.append(InlineKeyboardButton(text="📊 Бюджеты", callback_data="month:open_budgets"))
+    row1.append(InlineKeyboardButton(text="📊 Бюджет", callback_data="month:open_budgets"))
     row1.append(InlineKeyboardButton(text="📅 План", callback_data="month:open_upcoming"))
     row1.append(InlineKeyboardButton(text="📊 Год", callback_data=f"month:year:{for_date.year}"))
     rows.append(row1)
@@ -397,8 +397,7 @@ def _render_month(
     if budget_statuses:
         over = [s for s in budget_statuses if s["status"] == "over_budget"]
         risk = [s for s in budget_statuses if s["status"] == "at_risk"]
-        ok_first = next((s for s in budget_statuses if s["status"] == "ok"), None)
-        risk_items = over + risk + ([ok_first] if ok_first else [])
+        risk_items = over + risk
         if risk_items:
             budget_lines.append("📊 Бюджеты (топ риски):")
             for s in risk_items:
@@ -410,9 +409,6 @@ def _render_month(
                 elif s["status"] == "at_risk":
                     rem = s["remaining_after_planned"]
                     budget_lines.append(f"• {name} ⚠️ риск ({_fmt_amount(rem)} осталось)")
-                else:
-                    rem = s["remaining_after_planned"]
-                    budget_lines.append(f"• {name} ✅ {_fmt_amount(rem)} осталось")
 
     # ── Топ теги (top-3, is_planned=False already filtered in month_summary) ─
     top_tags = summary["top_tags"][:3]
