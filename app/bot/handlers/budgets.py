@@ -164,7 +164,7 @@ async def cb_new_budget(call: CallbackQuery, state: FSMContext):
 
 @router.message(BudgetStates.waiting_tag)
 async def recv_tag(message: Message, state: FSMContext):
-    tag = (message.text or "").strip().lower()
+    tag = (message.text or "").strip().lstrip('#').lower()
     if not tag or len(tag) < 1:
         await message.answer("Введи непустой тег. Попробуй снова или /cancel.")
         return

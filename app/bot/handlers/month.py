@@ -302,7 +302,7 @@ def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboard
             text="💡 Инсайты",
             callback_data=f"month:insights:{for_date.isoformat()}",
         ))
-    row1.append(InlineKeyboardButton(text="📊 Бюджет", callback_data="month:open_budgets"))
+    row1.append(InlineKeyboardButton(text="Бюджет", callback_data="month:open_budgets"))
     row1.append(InlineKeyboardButton(text="📅 План", callback_data="month:open_upcoming"))
     row1.append(InlineKeyboardButton(text="📊 Год", callback_data=f"month:year:{for_date.year}"))
     rows.append(row1)
