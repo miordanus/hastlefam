@@ -207,6 +207,9 @@ class Transaction(Base):
     is_planned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # is_skipped=True: planned transaction dismissed by user, hidden from /upcoming
     is_skipped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # is_internal_transfer=True: intra-household fund movement (e.g. ATM top-up to credit card).
+    # ЗАКОН: НИКОГДА не входит в доходы/расходы. Фильтровать везде: finance_service, month, ask, insights.
+    is_internal_transfer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Exchange-specific fields (direction=EXCHANGE only)
     from_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     from_currency: Mapped[str | None] = mapped_column(String(10))
