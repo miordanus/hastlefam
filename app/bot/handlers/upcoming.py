@@ -2,21 +2,22 @@
 upcoming.py — /upcoming command handler.
 
 Shows planned transactions (is_planned=True, is_skipped=False, occurred_at > now).
-Inline actions per transaction:
-  ✅ Оплатил  → mark as paid (is_planned=False, occurred_at=now)
-  ⏭ Пропустить → is_skipped=True, stays in DB
-  📅 Перенести  → FSM: enter new date, update occurred_at
+Inline action per transaction:
+  ✅ (button) → mark as paid (is_planned=False, is_skipped=False, occurred_at=now)
+
+Each transaction row has exactly one ✅ button.  Pressing it marks the row as
+paid and replaces its icon with ☑️ (no button), while remaining rows keep their
+✅ button.  The whole view is ONE message that gets edited in-place.
 """
 from __future__ import annotations
 
 import logging
 import uuid as _uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from aiogram import Router
-from aiogram.filters import Command, StateFilter
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.services.finance_service import FinanceService
@@ -26,39 +27,51 @@ from app.infrastructure.db.session import SessionLocal
 router = Router()
 log = logging.getLogger(__name__)
 
-_CB_PAID = "up:paid:"
-_CB_SKIP = "up:skip:"
-_CB_POSTPONE = "up:postpone:"
+_CB_PAID = "paid:"
 
-
-class UpcomingStates(StatesGroup):
-    waiting_new_date = State()
+_DIRECTION_ICON = {"expense": "💸", "income": "💰"}
 
 
 def _find_user(db, telegram_id: str):
     return db.query(User).filter(User.telegram_id == telegram_id, User.is_active.is_(True)).first()
 
 
-_DIRECTION_ICON = {"expense": "💸", "income": "💰"}
+def _fmt_amount(amount: Decimal | str) -> str:
+    """Format amount with thousands separator, strip trailing zeros."""
+    val = Decimal(str(amount))
+    # Show as integer if no fractional part, else 2 decimal places
+    if val == val.to_integral_value():
+        return f"{int(val):,}".replace(",", " ")
+    return f"{float(val):,.2f}".replace(",", " ")
 
 
-def _build_upcoming_text_and_kb(items: list[dict]) -> tuple[str, InlineKeyboardMarkup]:
-    """Build message text and keyboard for upcoming list."""
-    direction_icon = _DIRECTION_ICON
-    lines = ["🗓 Запланировано\n"]
+def _build_upcoming_text_and_kb(
+    items: list[dict],
+    paid_item: dict | None = None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build message text + keyboard.
+
+    paid_item: just-paid transaction to show as ☑️ without a button.
+    items: remaining unpaid transactions, each gets a ✅ button row.
+    """
+    lines: list[str] = ["🗓 Запланировано\n"]
     rows: list[list[InlineKeyboardButton]] = []
 
-    for x in items:
-        tag_suffix = f" #{x['primary_tag']}" if x.get("primary_tag") else ""
-        icon = direction_icon.get(x["direction"], "•")
+    if paid_item:
+        icon = _DIRECTION_ICON.get(paid_item["direction"], "•")
+        tag_suffix = f" #{paid_item['primary_tag']}" if paid_item.get("primary_tag") else ""
         lines.append(
-            f"• {x['due_date']} · {icon} {x['amount']} {x['currency']} · {x['title']}{tag_suffix}"
+            f"☑️ {_fmt_amount(paid_item['amount'])} {paid_item['currency']} · {paid_item['title']}{tag_suffix}"
         )
-        tx_id = x["id"]
+
+    for x in items:
+        icon = _DIRECTION_ICON.get(x["direction"], "•")
+        tag_suffix = f" #{x['primary_tag']}" if x.get("primary_tag") else ""
+        lines.append(
+            f"{icon} {_fmt_amount(x['amount'])} {x['currency']} · {x['title']}{tag_suffix}"
+        )
         rows.append([
-            InlineKeyboardButton(text="✅ Оплатил", callback_data=f"{_CB_PAID}{tx_id}"),
-            InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"{_CB_SKIP}{tx_id}"),
-            InlineKeyboardButton(text="📅 Перенести", callback_data=f"{_CB_POSTPONE}{tx_id}"),
+            InlineKeyboardButton(text="✅", callback_data=f"{_CB_PAID}{x['id']}"),
         ])
 
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -97,124 +110,41 @@ async def on_paid(callback: CallbackQuery) -> None:
     await callback.answer()
     tx_id = callback.data[len(_CB_PAID):]
 
+    paid_item: dict | None = None
     with SessionLocal() as db:
         tx = db.get(Transaction, _uuid.UUID(tx_id))
         if not tx:
             await callback.message.edit_text("⚠️ Транзакция не найдена.", reply_markup=None)
             return
+        paid_item = {
+            "id": tx_id,
+            "title": tx.merchant_raw or "",
+            "amount": tx.amount,
+            "currency": tx.currency.value if tx.currency else "RUB",
+            "direction": tx.direction.value,
+            "primary_tag": tx.primary_tag,
+        }
         tx.is_planned = False
+        tx.is_skipped = False
         tx.occurred_at = datetime.now(timezone.utc)
         db.commit()
-        household_id = str(tx.household_id)
 
-    # Refresh upcoming list
+    # Re-fetch remaining planned items
     telegram_id = str(callback.from_user.id) if callback.from_user else ""
+    remaining: list[dict] = []
     with SessionLocal() as db:
         user = _find_user(db, telegram_id)
         if user:
-            items = FinanceService(db).upcoming_transactions(str(user.household_id))
+            remaining = FinanceService(db).upcoming_transactions(str(user.household_id))
 
-    if not items:
-        await callback.message.edit_text("✅ Оплачено. Нет больше запланированных платежей.", reply_markup=None)
-        return
-
-    text, kb = _build_upcoming_text_and_kb(items)
-    await callback.message.edit_text("✅ Оплачено.\n\n" + text, reply_markup=kb)
-
-
-# ─── Skip ─────────────────────────────────────────────────────────────────────
-
-@router.callback_query(lambda c: c.data and c.data.startswith(_CB_SKIP))
-async def on_skip(callback: CallbackQuery) -> None:
-    await callback.answer()
-    tx_id = callback.data[len(_CB_SKIP):]
-
-    with SessionLocal() as db:
-        tx = db.get(Transaction, _uuid.UUID(tx_id))
-        if not tx:
-            await callback.message.edit_text("⚠️ Транзакция не найдена.", reply_markup=None)
-            return
-        tx.is_skipped = True
-        db.commit()
-
-    # Refresh upcoming list
-    telegram_id = str(callback.from_user.id) if callback.from_user else ""
-    with SessionLocal() as db:
-        user = _find_user(db, telegram_id)
-        if user:
-            items = FinanceService(db).upcoming_transactions(str(user.household_id))
-
-    if not items:
-        await callback.message.edit_text("⏭ Пропущено. Нет больше запланированных платежей.", reply_markup=None)
-        return
-
-    text, kb = _build_upcoming_text_and_kb(items)
-    await callback.message.edit_text("⏭ Пропущено.\n\n" + text, reply_markup=kb)
-
-
-# ─── Postpone ─────────────────────────────────────────────────────────────────
-
-@router.callback_query(lambda c: c.data and c.data.startswith(_CB_POSTPONE))
-async def on_postpone(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    tx_id = callback.data[len(_CB_POSTPONE):]
-
-    await state.set_state(UpcomingStates.waiting_new_date)
-    await state.update_data(tx_id=tx_id)
-    await callback.message.answer(
-        "Введи новую дату в формате ДД.ММ или ГГГГ-ММ-ДД:\n\n/cancel — отменить"
-    )
-
-
-@router.message(StateFilter(UpcomingStates.waiting_new_date))
-async def on_new_date_input(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
-    data = await state.get_data()
-    tx_id = data.get("tx_id", "")
-
-    # Parse date
-    new_dt = None
-    for fmt in ("%d.%m", "%d/%m", "%d-%m", "%Y-%m-%d"):
-        try:
-            parsed = datetime.strptime(text, fmt)
-            if fmt == "%d.%m" or fmt == "%d/%m" or fmt == "%d-%m":
-                # Use current year
-                now = datetime.now(timezone.utc)
-                parsed = parsed.replace(year=now.year)
-            new_dt = parsed.replace(tzinfo=timezone.utc)
-            break
-        except ValueError:
-            continue
-
-    if new_dt is None:
-        await message.answer(
-            "⚠️ Не удалось распознать дату. Введи в формате ДД.ММ или ГГГГ-ММ-ДД:\n\n/cancel — отменить"
+    if not remaining:
+        icon = _DIRECTION_ICON.get(paid_item["direction"], "•") if paid_item else "•"
+        title = paid_item["title"] if paid_item else ""
+        await callback.message.edit_text(
+            f"☑️ {title}\n\n🗓 Больше запланированных платежей нет.",
+            reply_markup=None,
         )
         return
 
-    with SessionLocal() as db:
-        tx = db.get(Transaction, _uuid.UUID(tx_id))
-        if not tx:
-            await state.clear()
-            await message.answer("⚠️ Транзакция не найдена.")
-            return
-        tx.occurred_at = new_dt
-        db.commit()
-
-    await state.clear()
-
-    # Refresh upcoming list
-    telegram_id = str(message.from_user.id) if message.from_user else ""
-    with SessionLocal() as db:
-        user = _find_user(db, telegram_id)
-        if not user:
-            await message.answer(f"📅 Перенесено на {new_dt.strftime('%d.%m.%Y')}.")
-            return
-        items = FinanceService(db).upcoming_transactions(str(user.household_id))
-
-    if not items:
-        await message.answer(f"📅 Перенесено на {new_dt.strftime('%d.%m.%Y')}. Нет больше запланированных платежей.")
-        return
-
-    text_out, kb = _build_upcoming_text_and_kb(items)
-    await message.answer(f"📅 Перенесено на {new_dt.strftime('%d.%m.%Y')}.\n\n" + text_out, reply_markup=kb)
+    text, kb = _build_upcoming_text_and_kb(remaining, paid_item=paid_item)
+    await callback.message.edit_text(text, reply_markup=kb)
