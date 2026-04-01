@@ -121,3 +121,27 @@ def test_exchange_excluded_from_totals(seeded_db):
     svc = FinanceService(seeded_db)
     result = svc.month_summary(str(HOUSEHOLD_ID))
     assert result["totals"]["spend_mtd"] == Decimal("100")  # only the groceries tx
+
+
+def test_internal_transfer_excluded_from_income(seeded_db):
+    _add_tx(seeded_db, amount=200, direction=TransactionDirection.INCOME)
+
+    # Internal transfer — should NOT appear in income totals
+    tx = Transaction(
+        id=uuid.uuid4(),
+        household_id=HOUSEHOLD_ID,
+        direction=TransactionDirection.INCOME,
+        amount=Decimal("90000"),
+        currency=Currency.USD,
+        occurred_at=datetime.now(timezone.utc),
+        merchant_raw="Внесение наличных через банкомат Т-Банк",
+        source="telegram",
+        parse_status="ok",
+        is_internal_transfer=True,
+    )
+    seeded_db.add(tx)
+    seeded_db.commit()
+
+    svc = FinanceService(seeded_db)
+    result = svc.month_summary(str(HOUSEHOLD_ID))
+    assert result["totals"]["income_mtd"] == Decimal("200")  # only real income

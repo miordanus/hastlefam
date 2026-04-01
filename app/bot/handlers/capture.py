@@ -156,6 +156,11 @@ async def _capture_text(message: Message, text: str) -> None:
                 extra_tags=result.extra_tags or [],
                 is_planned=False,  # ЗАКОН: capture = actual
             )
+            # Mark ATM top-ups and similar intra-household transfers so they are
+            # excluded from income/expense totals (ЗАКОН: is_internal_transfer=True).
+            if tx.merchant_raw and 'внесение наличных' in tx.merchant_raw.lower():
+                tx.is_internal_transfer = True
+
             db.add(tx)
 
             # Auto-learn: if user provided a tag, try to create a rule

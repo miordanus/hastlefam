@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-# ЗАКОН: get_monthly_actual() фильтрует is_planned=False.
+# ЗАКОН: get_monthly_actual() фильтрует is_planned=False AND is_internal_transfer=False.
 # get_planned_total() фильтрует is_planned=True AND occurred_at > now().
 # Смешивать нельзя нигде. Проверяй каждый новый запрос.
 
@@ -40,6 +40,7 @@ class FinanceService:
                 Transaction.occurred_at <= month_end_dt,
                 Transaction.direction != TransactionDirection.TRANSFER,
                 Transaction.is_planned == False,  # noqa: E712 — ЗАКОН: actual only
+                Transaction.is_internal_transfer == False,  # noqa: E712 — ЗАКОН: no internal transfers
             )
             .all()
         )
@@ -117,6 +118,7 @@ class FinanceService:
                 Transaction.occurred_at >= month_start_dt,
                 Transaction.occurred_at <= today_end_dt,
                 Transaction.is_planned == False,  # noqa: E712 — ЗАКОН: actual only
+                Transaction.is_internal_transfer == False,  # noqa: E712 — ЗАКОН: no internal transfers
             )
             .all()
         )
