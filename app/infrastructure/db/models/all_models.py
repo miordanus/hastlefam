@@ -413,6 +413,9 @@ class TagBudget(Base):
 class FxRate(Base):
     """Daily FX rate snapshot fetched from exchangerate-api.com."""
     __tablename__ = "fx_rates"
+    __table_args__ = (
+        UniqueConstraint("date", "from_currency", "to_currency", name="uq_fx_rates_date_from_to"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     from_currency: Mapped[str] = mapped_column(String(10), nullable=False)
