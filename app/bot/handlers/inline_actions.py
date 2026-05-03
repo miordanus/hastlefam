@@ -40,6 +40,7 @@ def build_post_capture_keyboard(
     tag_missing: bool,
     date_explicit: bool,
     currency_explicit: bool,
+    date_is_future: bool = False,
 ) -> InlineKeyboardMarkup:
     """
     Build inline keyboard with only relevant action buttons.
@@ -56,6 +57,8 @@ def build_post_capture_keyboard(
     buttons.append(InlineKeyboardButton(text="📅 Дата", callback_data=f"{_CB_DATE}{tx_id}"))
     if not currency_explicit:
         buttons.append(InlineKeyboardButton(text="💱 Валюта", callback_data=f"{_CB_CURRENCY}{tx_id}"))
+    if date_is_future:
+        buttons.append(InlineKeyboardButton(text="📅 В план", callback_data=f"{_CB_PLAN}{tx_id}"))
     buttons.append(InlineKeyboardButton(text="✅ Готово", callback_data=f"{_CB_DONE}{tx_id}"))
 
     # Layout: up to 2 buttons per row, Done always last on its own row
@@ -316,17 +319,13 @@ async def on_plan_date_input(message: Message, state: FSMContext) -> None:
             await message.answer("⚠️ Запись не найдена.")
             return
 
-        from app.application.services.finance_service import FinanceService
-        FinanceService(db).create_planned_payment(
-            household_id=str(tx.household_id),
-            title=tx.merchant_raw or "платёж",
-            amount=Decimal(str(tx.amount)),
-            currency=tx.currency,
-            due_date=due_date,
-            primary_tag=tx.primary_tag,
-            linked_transaction_id=str(tx.id),
-        )
+        from datetime import datetime as _dt, timezone as _tz
+        tx.is_planned = True
+        tx.occurred_at = _dt.combine(due_date, _dt.min.time()).replace(tzinfo=_tz.utc)
+        db.commit()
+        merchant = tx.merchant_raw or "платёж"
+        amount_str = f"{tx.amount} {tx.currency.value if tx.currency else 'RUB'}"
 
     await message.answer(
-        f"✅ Запланировал.\n{tx.amount} {tx.currency.value} · {tx.merchant_raw or 'платёж'}\nСрок: {due_date.strftime('%d.%m.%Y')}"
+        f"📅 Переместил в план.\n{amount_str} · {merchant} · {due_date.strftime('%d.%m.%Y')}\nПоявится в /upcoming."
     )

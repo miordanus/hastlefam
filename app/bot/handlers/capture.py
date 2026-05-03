@@ -183,11 +183,13 @@ async def _capture_text(message: Message, text: str) -> None:
         await message.answer("⚠️ Сейчас не получилось обработать запрос.\nПопробуй ещё раз чуть позже.")
         return
 
+    today = datetime.now(timezone.utc).date()
     keyboard = build_post_capture_keyboard(
         tx_id=tx_id,
         tag_missing=effective_tag is None,
         date_explicit=result.date_explicit,
         currency_explicit=result.currency_explicit,
+        date_is_future=result.occurred_date > today,
     )
 
     from app.domain.enums import TransactionDirection as TD
