@@ -81,7 +81,7 @@ class FinanceService:
             for tag in top_tag_names
         ]
 
-        upcoming = self.upcoming_planned(household_id, until_date=month_end)
+        upcoming = self.upcoming_transactions(household_id, until_date=month_end)
 
         return {
             "period": {"month_start": month_start.isoformat(), "today": today.isoformat()},
@@ -139,7 +139,7 @@ class FinanceService:
             elif tx.direction == TransactionDirection.INCOME:
                 income_by_currency[cur] = income_by_currency.get(cur, Decimal("0")) + amount
 
-        planned_soon = self.upcoming_planned(household_id, until_date=soon_until)
+        planned_soon = self.upcoming_transactions(household_id, until_date=soon_until)
 
         return {
             "spend_by_currency": spend_by_currency,
@@ -150,10 +150,11 @@ class FinanceService:
 
     # ─── Planned totals (is_planned=True) ────────────────────────────────────
 
-    def get_planned_total(self, household_id: str, year: int, month: int) -> dict[str, Decimal]:
-        """Sum of planned (is_planned=True) future transactions for the month, per currency.
+    def get_planned_total(self, household_id: str, year: int, month: int) -> dict[str, Any]:
+        """Sum of planned (is_planned=True) future transactions for the month, by direction.
 
         ЗАКОН: фильтр is_planned=True AND occurred_at > now().
+        Returns {"expense_by_currency": {...}, "income_by_currency": {...}}.
         """
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
         now = datetime.now(timezone.utc)
@@ -169,16 +170,21 @@ class FinanceService:
                 Transaction.occurred_at <= month_end,
                 Transaction.occurred_at > now,
                 Transaction.is_planned == True,  # noqa: E712 — ЗАКОН: planned only
-                Transaction.direction == TransactionDirection.EXPENSE,
+                Transaction.is_skipped.is_(False),
             )
             .all()
         )
 
-        totals: dict[str, Decimal] = {}
+        expense_totals: dict[str, Decimal] = {}
+        income_totals: dict[str, Decimal] = {}
         for tx in rows:
             cur = tx.currency.value if tx.currency else "RUB"
-            totals[cur] = totals.get(cur, Decimal("0")) + Decimal(str(tx.amount))
-        return totals
+            amount = Decimal(str(tx.amount))
+            if tx.direction == TransactionDirection.EXPENSE:
+                expense_totals[cur] = expense_totals.get(cur, Decimal("0")) + amount
+            elif tx.direction == TransactionDirection.INCOME:
+                income_totals[cur] = income_totals.get(cur, Decimal("0")) + amount
+        return {"expense_by_currency": expense_totals, "income_by_currency": income_totals}
 
     # ─── Planned payments ─────────────────────────────────────────────────────
 
@@ -275,22 +281,27 @@ class FinanceService:
         self.db.commit()
         return tx
 
-    def upcoming_transactions(self, household_id: str) -> list[dict[str, Any]]:
+    def upcoming_transactions(self, household_id: str, until_date: date | None = None) -> list[dict[str, Any]]:
         """Planned transactions not yet skipped: is_planned=True, is_skipped=False, occurred_at > now."""
         today = datetime.now(timezone.utc).date()
         tomorrow_dt = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(days=1)
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
 
+        filters = [
+            Transaction.household_id == hid,
+            Transaction.is_planned.is_(True),
+            Transaction.is_skipped.is_(False),
+            Transaction.occurred_at >= tomorrow_dt,
+            Transaction.direction != TransactionDirection.TRANSFER,
+            Transaction.direction != TransactionDirection.EXCHANGE,
+        ]
+        if until_date is not None:
+            until_dt = datetime(until_date.year, until_date.month, until_date.day, 23, 59, 59, tzinfo=timezone.utc)
+            filters.append(Transaction.occurred_at <= until_dt)
+
         rows = (
             self.db.query(Transaction)
-            .filter(
-                Transaction.household_id == hid,
-                Transaction.is_planned.is_(True),
-                Transaction.is_skipped.is_(False),
-                Transaction.occurred_at >= tomorrow_dt,
-                Transaction.direction != TransactionDirection.TRANSFER,
-                Transaction.direction != TransactionDirection.EXCHANGE,
-            )
+            .filter(*filters)
             .order_by(Transaction.occurred_at.asc())
             .all()
         )

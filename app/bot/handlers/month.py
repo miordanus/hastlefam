@@ -341,7 +341,8 @@ def _fmt_multicur(by_cur: dict[str, Decimal]) -> str:
 def _render_month(
     summary: dict,
     for_date: date,
-    planned_totals: dict | None = None,
+    planned_expense_totals: dict | None = None,
+    planned_income_totals: dict | None = None,
     budget_statuses: list | None = None,
     grand_total_rub: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
@@ -371,15 +372,15 @@ def _render_month(
 
     # ── План до конца месяца ──────────────────────────────────────────────
     plan_lines: list[str] = []
-    if planned_totals:
+    if planned_expense_totals:
         plan_str = " | ".join(
-            f"{_fmt_amount(v)} {_cur_sym(c)}" for c, v in planned_totals.items()
+            f"{_fmt_amount(v)} {_cur_sym(c)}" for c, v in planned_expense_totals.items()
         )
-        plan_line = f"📅 План до конца месяца: {plan_str}"
+        plan_line = f"📅 Ожидаются расходы: {plan_str}"
         # → после плана (only for currencies present in balance)
         after_parts = []
         after_negative = False
-        for cur, plan_amt in planned_totals.items():
+        for cur, plan_amt in planned_expense_totals.items():
             bal = balance_by_cur.get(cur)
             if bal is not None:
                 after = bal - plan_amt
@@ -391,6 +392,11 @@ def _render_month(
             after_str = " | ".join(after_parts)
             plan_line += f" → после плана останется: {after_str}" + (" ⚠️" if after_negative else "")
         plan_lines = [plan_line]
+    if planned_income_totals:
+        income_plan_str = " | ".join(
+            f"{_fmt_amount(v)} {_cur_sym(c)}" for c, v in planned_income_totals.items()
+        )
+        plan_lines.append(f"📥 Ожидается: {income_plan_str}")
 
     # ── Бюджеты (топ риски) ───────────────────────────────────────────────
     budget_lines: list[str] = []
@@ -442,7 +448,9 @@ def _fetch_and_render(db, user, for_date: date) -> tuple[str, InlineKeyboardMark
     """Shared logic: fetch summary, render month view."""
     svc = FinanceService(db)
     summary = svc.month_summary(str(user.household_id), for_date=for_date)
-    planned_totals = svc.get_planned_total(str(user.household_id), for_date.year, for_date.month)
+    planned_result = svc.get_planned_total(str(user.household_id), for_date.year, for_date.month)
+    planned_expense_totals = planned_result.get("expense_by_currency") or None
+    planned_income_totals = planned_result.get("income_by_currency") or None
 
     budget_statuses: list = []
     try:
@@ -479,7 +487,8 @@ def _fetch_and_render(db, user, for_date: date) -> tuple[str, InlineKeyboardMark
     return _render_month(
         summary,
         for_date,
-        planned_totals=planned_totals or None,
+        planned_expense_totals=planned_expense_totals,
+        planned_income_totals=planned_income_totals,
         budget_statuses=budget_statuses,
         grand_total_rub=grand_total_rub,
     )
