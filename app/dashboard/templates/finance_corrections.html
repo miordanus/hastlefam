@@ -8,13 +8,14 @@
       th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; }
       th { background-color: #f2f2f2; }
       form.inline { display: inline; }
+      input.tag-input { width: 100px; }
     </style>
   </head>
   <body>
     <h2>Transactions correction</h2>
     <p>
       <a href="/finance/corrections?household_id={{ household_id }}&uncategorized=false">All</a> |
-      <a href="/finance/corrections?household_id={{ household_id }}&uncategorized=true">Uncategorized only</a>
+      <a href="/finance/corrections?household_id={{ household_id }}&uncategorized=true">Untagged only</a>
     </p>
 
     <table>
@@ -23,11 +24,9 @@
           <th>Date</th>
           <th>Amount</th>
           <th>Merchant</th>
-          <th>Category</th>
+          <th>Tag</th>
           <th>Account</th>
-          <th>Owner</th>
           <th>Source</th>
-          <th>Recurring</th>
           <th>Save</th>
         </tr>
       </thead>
@@ -39,24 +38,12 @@
             <td>{{ tx.amount }} {{ tx.currency.value }}</td>
             <td>{{ tx.merchant_raw or tx.description_raw or '-' }}</td>
             <td>
-              <select name="category_id">
-                <option value="">--</option>
-                {% for c in categories %}
-                <option value="{{ c.id }}" {% if tx.category_id == c.id %}selected{% endif %}>{{ c.name }}</option>
-                {% endfor %}
-              </select>
+              <input class="tag-input" type="text" name="primary_tag"
+                     value="{{ tx.primary_tag or '' }}"
+                     placeholder="#тег"/>
             </td>
             <td>{{ tx.account_id or '-' }}</td>
-            <td>{{ tx.owner_id or '-' }}</td>
             <td>{{ tx.source }}</td>
-            <td>
-              <select name="recurring_payment_id">
-                <option value="">--</option>
-                {% for r in recurring %}
-                <option value="{{ r.id }}">{{ r.title }}</option>
-                {% endfor %}
-              </select>
-            </td>
             <td>
               <input type="hidden" name="household_id" value="{{ household_id }}"/>
               <input type="hidden" name="uncategorized" value="{{ uncategorized }}"/>

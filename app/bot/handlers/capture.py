@@ -122,7 +122,26 @@ async def _capture_text(message: Message, text: str) -> None:
                 Transaction.dedup_fingerprint == fingerprint,
             ).first()
             if existing:
-                await message.answer("Похоже на дубль, пропустил.")
+                from app.bot import draft_store
+                from app.bot.handlers.duplicate_handler import ask_duplicate_confirm
+                draft = {
+                    "direction": result.direction.value,
+                    "amount": str(result.amount),
+                    "currency": result.currency.value,
+                    "occurred_at": datetime.combine(result.occurred_date, datetime.min.time()).replace(tzinfo=timezone.utc).isoformat(),
+                    "merchant": result.merchant,
+                    "description_raw": text,
+                    "fingerprint": fingerprint,
+                    "primary_tag": result.primary_tag,
+                    "extra_tags": result.extra_tags or [],
+                    "date_explicit": result.date_explicit,
+                    "currency_explicit": result.currency_explicit,
+                }
+                draft_key = await draft_store.store(draft)
+                if draft_key is not None:
+                    await ask_duplicate_confirm(message, result, draft_key)
+                else:
+                    await message.answer("Похоже на дубль, пропустил.")
                 return
 
             from app.application.services.finance_service import FinanceService

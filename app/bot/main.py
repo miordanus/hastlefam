@@ -142,6 +142,11 @@ async def main() -> None:
     _global_lock = lock
     _global_redis = redis_client
 
+    # Inject Redis into draft store for duplicate-confirmation flow
+    if redis_client:
+        from app.bot import draft_store
+        draft_store.set_client(redis_client)
+
     bot = Bot(token=settings.telegram_bot_token, session=_ConflictExitSession())
     dp = Dispatcher()
 
