@@ -584,6 +584,125 @@ class FinanceService:
 
         return {"accounts": result, "total_by_currency": total_by_currency}
 
+    # ─── Cashflow projection ──────────────────────────────────────────────────
+
+    def cashflow_projection(self, household_id: str, days: int = 60) -> dict[str, Any]:
+        """Return a cashflow projection over the next `days` days.
+
+        Balances from latest BalanceSnapshot per account.
+        Planned items from Transaction(is_planned=True).
+        Debts from Debt(settled_at IS NULL, due_date in window) — info only, not in formula.
+        Formula: free_balance = total_balances_rub - planned_expenses_rub + planned_income_rub.
+        """
+        from app.application.services.fx_service import convert_to_rub
+        from app.infrastructure.db.models import Debt
+
+        today = datetime.now(timezone.utc).date()
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        until_date = today + timedelta(days=days)
+        cutoff_30 = today + timedelta(days=30)
+
+        # 1. Account balances (latest snapshot per active account)
+        accounts = (
+            self.db.query(Account)
+            .filter(Account.household_id == hid, Account.is_active.is_(True))
+            .order_by(Account.created_at.asc())
+            .all()
+        )
+        account_items: list[dict[str, Any]] = []
+        balances_by_currency: dict[str, Decimal] = {}
+        for acc in accounts:
+            snap = (
+                self.db.query(BalanceSnapshot)
+                .filter(BalanceSnapshot.account_id == acc.id)
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            cur = acc.currency.value
+            if snap:
+                bal = Decimal(str(snap.actual_balance))
+                account_items.append({"name": acc.name, "currency": cur, "balance": bal})
+                balances_by_currency[cur] = balances_by_currency.get(cur, Decimal("0")) + bal
+            else:
+                account_items.append({"name": acc.name, "currency": cur, "balance": None})
+
+        # 2. Planned income/expenses in window
+        planned = self.upcoming_transactions(household_id, until_date=until_date)
+        planned_income = [p for p in planned if p["direction"] == "income"]
+        planned_expenses = [p for p in planned if p["direction"] == "expense"]
+
+        # 3. Debts due in window (info only)
+        debt_rows = (
+            self.db.query(Debt)
+            .filter(
+                Debt.household_id == hid,
+                Debt.settled_at.is_(None),
+                Debt.due_date.isnot(None),
+                Debt.due_date >= today,
+                Debt.due_date <= until_date,
+            )
+            .order_by(Debt.due_date.asc())
+            .all()
+        )
+        debts_due = [
+            {
+                "due_date": d.due_date.isoformat(),
+                "counterparty": d.counterparty_name,
+                "amount": Decimal(str(d.amount)),
+                "currency": d.currency,
+                "direction": d.direction,
+            }
+            for d in debt_rows
+        ]
+
+        # 4. Convert to RUB for projections
+        fx_unavailable = False
+
+        total_balance_rub = Decimal("0")
+        for cur, bal in balances_by_currency.items():
+            rub = convert_to_rub(bal, cur, today, self.db)
+            if rub is None:
+                fx_unavailable = True
+            else:
+                total_balance_rub += rub
+
+        income_30_rub = Decimal("0")
+        income_60_rub = Decimal("0")
+        expense_30_rub = Decimal("0")
+        expense_60_rub = Decimal("0")
+
+        for item in planned_income:
+            rub = convert_to_rub(Decimal(str(item["amount"])), item["currency"], today, self.db)
+            if rub is None:
+                fx_unavailable = True
+                rub = Decimal("0")
+            income_60_rub += rub
+            if item["due_date"] <= cutoff_30.isoformat():
+                income_30_rub += rub
+
+        for item in planned_expenses:
+            rub = convert_to_rub(Decimal(str(item["amount"])), item["currency"], today, self.db)
+            if rub is None:
+                fx_unavailable = True
+                rub = Decimal("0")
+            expense_60_rub += rub
+            if item["due_date"] <= cutoff_30.isoformat():
+                expense_30_rub += rub
+
+        return {
+            "today": today,
+            "days": days,
+            "account_items": account_items,
+            "balances_by_currency": balances_by_currency,
+            "total_balance_rub": total_balance_rub,
+            "planned_income": planned_income,
+            "planned_expenses": planned_expenses,
+            "debts_due": debts_due,
+            "free_30": total_balance_rub - expense_30_rub + income_30_rub,
+            "free_60": total_balance_rub - expense_60_rub + income_60_rub,
+            "fx_unavailable": fx_unavailable,
+        }
+
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 
     def upcoming_payments(self, household_id: str, days: int = 7, until_date: date | None = None) -> list[dict[str, Any]]:
