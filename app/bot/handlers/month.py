@@ -314,7 +314,16 @@ def _build_month_keyboard(untagged_count: int, for_date: date) -> InlineKeyboard
             callback_data="month:open_inbox",
         )])
 
-    # Row 3: navigation
+    # Row 3: Проверить (only for past months)
+    today = datetime.now(timezone.utc).date()
+    is_past_month = (for_date.year, for_date.month) < (today.year, today.month)
+    if is_past_month:
+        rows.append([InlineKeyboardButton(
+            text="✅ Проверить",
+            callback_data=f"month:verify:{for_date.isoformat()}",
+        )])
+
+    # Row 4: navigation
     prev_d = _prev_month(for_date)
     next_d = _next_month(for_date)
     rows.append([
@@ -592,6 +601,111 @@ async def on_month_insights(callback: CallbackQuery) -> None:
 
     await callback.message.answer(f"\U0001f4ca \u0418\u043d\u0441\u0430\u0439\u0442\u044b \u0437\u0430 {_MONTH_RU[for_date.month]} {for_date.year}:\n\n{text}")
 
+
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("month:verify:"))
+async def on_month_verify(callback: CallbackQuery) -> None:
+    await callback.answer()
+    date_str = callback.data[len("month:verify:"):]
+    try:
+        for_date = date.fromisoformat(date_str)
+    except ValueError:
+        return
+
+    import calendar as _cal
+    from datetime import timedelta as _td
+
+    with SessionLocal() as db:
+        user = _find_user(db, str(callback.from_user.id)) if callback.from_user else None
+        if not user:
+            return
+
+        import uuid as _uuid
+        hid = _uuid.UUID(str(user.household_id))
+        month_start = datetime(for_date.year, for_date.month, 1, tzinfo=timezone.utc)
+        last_day_num = _cal.monthrange(for_date.year, for_date.month)[1]
+        month_end = datetime(for_date.year, for_date.month, last_day_num, 23, 59, 59, tzinfo=timezone.utc)
+
+        from app.infrastructure.db.models import Transaction as Tx
+        from app.domain.enums import TransactionDirection
+
+        # Days with at least one actual expense
+        expense_rows = (
+            db.query(Tx.occurred_at)
+            .filter(
+                Tx.household_id == hid,
+                Tx.occurred_at >= month_start,
+                Tx.occurred_at <= month_end,
+                Tx.is_planned.is_(False),
+                Tx.is_internal_transfer.is_(False),
+                Tx.direction == TransactionDirection.EXPENSE,
+            )
+            .all()
+        )
+        days_with_expense = {r.occurred_at.date() for r in expense_rows}
+
+        # Find runs of ≥3 consecutive days with no expenses
+        gap_runs: list[tuple[date, int]] = []
+        run_start = None
+        run_len = 0
+        all_days = [date(for_date.year, for_date.month, d) for d in range(1, last_day_num + 1)]
+        for d in all_days:
+            if d not in days_with_expense:
+                if run_start is None:
+                    run_start = d
+                run_len += 1
+            else:
+                if run_start is not None and run_len >= 3:
+                    gap_runs.append((run_start, run_len))
+                run_start = None
+                run_len = 0
+        if run_start is not None and run_len >= 3:
+            gap_runs.append((run_start, run_len))
+
+        # Untagged actual transactions
+        untagged = (
+            db.query(Tx)
+            .filter(
+                Tx.household_id == hid,
+                Tx.occurred_at >= month_start,
+                Tx.occurred_at <= month_end,
+                Tx.is_planned.is_(False),
+                Tx.is_internal_transfer.is_(False),
+                Tx.primary_tag.is_(None),
+            )
+            .count()
+        )
+
+        # Planned entries that were due this month but never marked paid
+        unresolved_planned = (
+            db.query(Tx)
+            .filter(
+                Tx.household_id == hid,
+                Tx.occurred_at >= month_start,
+                Tx.occurred_at <= month_end,
+                Tx.is_planned.is_(True),
+                Tx.is_skipped.is_(False),
+            )
+            .count()
+        )
+
+    month_label = f"{_MONTH_RU[for_date.month]} {for_date.year}"
+    lines = [f"✅ Проверка — {month_label}", ""]
+
+    if not gap_runs and untagged == 0 and unresolved_planned == 0:
+        lines.append("Всё в порядке — пробелов и проблем нет.")
+    else:
+        if gap_runs:
+            lines.append("Дни без трат (≥3 подряд):")
+            for start, length in gap_runs:
+                lines.append(f"• {start.strftime('%d.%m')} — {(start + _td(days=length-1)).strftime('%d.%m')} ({length} дней)")
+        if untagged > 0:
+            lines.append(f"Без тега: {untagged} записей — /inbox")
+        if unresolved_planned > 0:
+            lines.append(f"Планировалось, не отмечено оплаченным: {unresolved_planned}")
+
+    await callback.message.answer("\n".join(lines))
 
 # ─── Annual P&L ───────────────────────────────────────────────────────────────
 

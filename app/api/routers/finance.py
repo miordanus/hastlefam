@@ -69,16 +69,13 @@ def update_correction(
     transaction_id: str,
     household_id: str = Form(...),
     uncategorized: bool = Form(False),
-    category_id: str | None = Form(None),
-    recurring_payment_id: str | None = Form(None),
+    primary_tag: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    _ = TransactionCorrectionUpdate(category_id=category_id or None, recurring_payment_id=recurring_payment_id or None)
     tx = db.get(Transaction, transaction_id)
     if tx:
-        tx.category_id = category_id or None
-        if recurring_payment_id:
-            tx.description = f"linked_recurring:{recurring_payment_id}"
+        tag = (primary_tag or "").strip().lower() or None
+        tx.primary_tag = tag
         db.commit()
     return RedirectResponse(
         url=f"/finance/corrections?household_id={household_id}&uncategorized={str(uncategorized).lower()}",

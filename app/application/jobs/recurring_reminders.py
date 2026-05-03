@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.application.services.finance_service import FinanceService
 from app.infrastructure.config.settings import get_settings
-from app.infrastructure.db.models import EventLog, User
+from app.infrastructure.db.models import Debt, EventLog, User
 from app.infrastructure.db.session import SessionLocal
 from app.infrastructure.logging.logger import get_logger
 
@@ -56,6 +56,46 @@ def run_recurring_reminders(days: int = 3) -> dict:
                         )
                     )
                     sent += 1
+                # ── Debt due-date reminders ─────────────────────────────
+                today = datetime.now(timezone.utc).date()
+                soon = today + timedelta(days=days)
+                debt_rows = db.query(Debt).filter(
+                    Debt.household_id == household_id,
+                    Debt.settled_at.is_(None),
+                    Debt.due_date.isnot(None),
+                    Debt.due_date >= today,
+                    Debt.due_date <= soon,
+                ).all()
+
+                for debt in debt_rows:
+                    if _debt_reminder_sent(db, household_id, debt.id):
+                        skipped += 1
+                        continue
+                    direction_label = "ты должен" if debt.direction == "i_owe" else "тебе должны"
+                    due_str = debt.due_date.strftime("%d.%m.%Y")
+                    text = (
+                        f"⏰ Срок долга: {direction_label} {debt.counterparty_name} "
+                        f"{debt.amount} {debt.currency} до {due_str}"
+                    )
+                    users = db.query(User).filter(
+                        User.household_id == household_id, User.is_active.is_(True)
+                    ).all()
+                    for user in users:
+                        try:
+                            asyncio.run(_send(bot, int(user.telegram_id), text))
+                        except Exception as exc:
+                            logger.warning("debt_reminder.send_failed", user_id=str(user.id), error=str(exc))
+                    db.add(EventLog(
+                        household_id=household_id,
+                        user_id=None,
+                        event_type="debt_reminder_sent",
+                        entity_type="debt",
+                        entity_id=debt.id,
+                        payload={"due_date": debt.due_date.isoformat(), "days": days},
+                        severity="info",
+                    ))
+                    sent += 1
+
             db.commit()
         finally:
             asyncio.run(bot.session.close())
@@ -71,6 +111,21 @@ def _already_sent(db: Session, household_id: uuid.UUID, recurring_id: uuid.UUID)
             EventLog.household_id == household_id,
             EventLog.event_type == "recurring_reminder_sent",
             EventLog.entity_id == recurring_id,
+            EventLog.created_at >= cutoff,
+        )
+        .first()
+    )
+    return bool(hit)
+
+
+def _debt_reminder_sent(db: Session, household_id: uuid.UUID, debt_id: uuid.UUID) -> bool:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=20)
+    hit = (
+        db.query(EventLog)
+        .filter(
+            EventLog.household_id == household_id,
+            EventLog.event_type == "debt_reminder_sent",
+            EventLog.entity_id == debt_id,
             EventLog.created_at >= cutoff,
         )
         .first()
