@@ -46,10 +46,10 @@ Railway `Procfile` maps `web:` → uvicorn, `worker:` → bot. `railway.json` ha
 ### Request flow: Telegram message → DB
 
 1. `bot/main.py` polls Telegram; `LoggingMiddleware` runs first, then `IdempotencyMiddleware` (Redis dedup by `chat_id+message_id`).
-2. Routers are registered in priority order: `cancel` → command handlers → `exchange_router` → `inline_actions_router` → `duplicate_router` → ... → `capture_router` (catch-all last).
+2. Routers are registered in priority order: `cancel` → command handlers (`start`, `help`, `month`, `upcoming`, `cashflow`, `review`, `recurring`, `budgets`, `debts`, …) → `exchange_router` → `inline_actions_router` → `duplicate_router` → ... → `capture_router` (catch-all last).
 3. `capture.py` dispatches to: `debt_parser` → `split_parser` → `expense_parser` (in that order; first match wins).
-4. After parsing, `autocat_service.lookup_tag()` applies merchant→tag rules; `finance_service` or direct DB write saves the `Transaction`.
-5. Post-capture inline keyboard (date / tag / currency correction) is built by `inline_actions.build_post_capture_keyboard()`.
+4. After parsing, `autocat_service.lookup_tag()` applies merchant→tag rules; `finance_service` or direct DB write saves the `Transaction`. On suspected duplicate (`dedup_fingerprint` match) the draft is stored in Redis via `draft_store` and the user gets a confirm dialog from `duplicate_handler` instead of a silent drop. If Redis is unavailable, falls back to silent drop.
+5. Post-capture inline keyboard (date / tag / currency / `[📅 В план]` if future-dated) is built by `inline_actions.build_post_capture_keyboard()`.
 
 ### Database layer
 
@@ -100,6 +100,20 @@ Core finance logic (categorization, parsing, summaries) is entirely rule-based. 
 ### Redis (optional)
 
 Bot starts without Redis. When available: distributed polling lock (`hastlefam:bot:poller`, TTL 60s, renewed every 20s) prevents two instances polling simultaneously. On `TelegramConflictError`, lock is released before `os._exit(1)`. New instance waits up to 70s for stale lock to expire.
+
+### Schedulers (worker only)
+
+`start_daily_status_scheduler(bot)` in `app/application/jobs/daily_status_job.py` registers two cron jobs in one shared `AsyncIOScheduler` (Europe/Moscow):
+
+- **10:00** — `send_daily_status` (MTD digest + planned soon).
+- **10:05** — `run_recurring_reminders(bot, days=3)` from `app/application/jobs/recurring_reminders.py`. Three blocks in order:
+  1. legacy `PlannedPayment` reminders (20-h dedup via `EventLog.event_type='recurring_reminder_sent'`);
+  2. open `Debt` due in next 3 days (20-h dedup via `EventLog.event_type='debt_reminder_sent'`);
+  3. `RecurringPayment(is_active=True, next_due_date ≤ today+3)` → creates `Transaction(is_planned=True)` for that month if none exists with same `merchant_raw`, then advances `next_due_date` by one month anchored on `day_of_month` (so date never drifts after a short month).
+
+Both jobs receive the **same `bot` instance** that is polling — never construct a new `Bot(token=...)` inside a job, or `_ConflictExitSession` will kill the worker.
+
+`RecurringPayment` has no `direction` column. `_infer_recurring_direction(title)` does best-effort matching against income hints (`зарплата`, `salary`, `доход`, …); defaults to `EXPENSE`. Add an explicit column when this becomes load-bearing.
 
 ### Observability
 

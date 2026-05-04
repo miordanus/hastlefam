@@ -14,7 +14,6 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.services.finance_service import FinanceService
-from app.domain.enums import TransactionDirection
 from app.infrastructure.db.models import Debt, User
 from app.infrastructure.db.session import SessionLocal
 
@@ -50,7 +49,7 @@ def _build_review_keyboard(untagged: int) -> InlineKeyboardMarkup:
             callback_data="month:open_inbox",
         )])
     rows.append([InlineKeyboardButton(
-        text="📅 Добавить план",
+        text="📋 Открыть план",
         callback_data="month:open_upcoming",
     )])
     return InlineKeyboardMarkup(inline_keyboard=rows)

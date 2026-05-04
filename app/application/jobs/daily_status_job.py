@@ -96,7 +96,14 @@ async def send_daily_status(bot) -> None:
 
 
 def start_daily_status_scheduler(bot) -> AsyncIOScheduler:
-    """Create and start the APScheduler for daily status. Returns scheduler instance."""
+    """Create and start the APScheduler for daily status + reminders.
+
+    Two jobs share one scheduler:
+      - daily_status: 10:00 MSK
+      - reminders (debt due-date + recurring → planned tx): 10:05 MSK
+    """
+    from app.application.jobs.recurring_reminders import run_recurring_reminders
+
     scheduler = AsyncIOScheduler(timezone=MSK)
     scheduler.add_job(
         send_daily_status,
@@ -107,6 +114,15 @@ def start_daily_status_scheduler(bot) -> AsyncIOScheduler:
         id="daily_status",
         replace_existing=True,
     )
+    scheduler.add_job(
+        run_recurring_reminders,
+        trigger="cron",
+        hour=10,
+        minute=5,
+        kwargs={"bot": bot},
+        id="reminders",
+        replace_existing=True,
+    )
     scheduler.start()
-    log.info("daily_status scheduler started (10:00 MSK)")
+    log.info("scheduler started (daily_status 10:00 MSK, reminders 10:05 MSK)")
     return scheduler
