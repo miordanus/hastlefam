@@ -167,6 +167,18 @@ Bot starts without Redis. When available it provides three things:
 - `event_log` DB table for domain events via `observability/event_logger.py`.
 - `observability/prompt_logger.py` for LLM prompt/response logging.
 
+### Openclaw agent (external, Supabase-direct)
+
+Openclaw is an external AI agent (already live, wired to the Telegram bot via Whisper STT) that bypasses the FastAPI layer entirely and speaks the Supabase REST API directly using `SUPABASE_SERVICE_ROLE_KEY`.
+
+Two capabilities:
+1. **Mass-add transactions from voice** — transcription (Whisper) → parse items → resolve `accounts` + `finance_categories` UUIDs → bulk `POST /transactions`.
+2. **AI finance advisor** — natural-language finance questions → fetch + aggregate transactions via REST → answer.
+
+Openclaw targets the `hastlefam` schema via `Accept-Profile: hastlefam` (reads) and `Content-Profile: hastlefam` (writes) headers.
+
+Full instructions: `docs/openclaw-agent-instructions.md` (loaded as Openclaw's system prompt). No new code or migrations were needed — the schema was already complete.
+
 ---
 
 ## Key conventions
