@@ -95,6 +95,18 @@ async def send_daily_status(bot) -> None:
         log.error("daily_status job failed: %s", e, exc_info=True)
 
 
+async def _run_recurring_reminders_job() -> None:
+    """Async wrapper: run synchronous recurring_reminders in thread pool."""
+    import asyncio
+    from app.application.jobs.recurring_reminders import run_recurring_reminders
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, run_recurring_reminders)
+        log.info("recurring_reminders completed: %s", result)
+    except Exception as exc:
+        log.error("recurring_reminders failed: %s", exc, exc_info=True)
+
+
 def start_daily_status_scheduler(bot) -> AsyncIOScheduler:
     """Create and start the APScheduler for daily status. Returns scheduler instance."""
     scheduler = AsyncIOScheduler(timezone=MSK)
@@ -107,6 +119,14 @@ def start_daily_status_scheduler(bot) -> AsyncIOScheduler:
         id="daily_status",
         replace_existing=True,
     )
+    scheduler.add_job(
+        _run_recurring_reminders_job,
+        trigger="cron",
+        hour=9,
+        minute=0,
+        id="recurring_reminders",
+        replace_existing=True,
+    )
     scheduler.start()
-    log.info("daily_status scheduler started (10:00 MSK)")
+    log.info("schedulers started: daily_status 10:00 MSK, recurring_reminders 09:00 MSK")
     return scheduler
