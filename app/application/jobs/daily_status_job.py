@@ -8,6 +8,7 @@ Requires apscheduler>=3.10 in pyproject.toml.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -97,9 +98,8 @@ async def send_daily_status(bot) -> None:
 
 async def _run_recurring_reminders_job() -> None:
     """Async wrapper: run synchronous recurring_reminders in thread pool."""
-    import asyncio
     from app.application.jobs.recurring_reminders import run_recurring_reminders
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(None, run_recurring_reminders)
         log.info("recurring_reminders completed: %s", result)
