@@ -47,9 +47,12 @@ app/
     prompt_logger.py            # LLM prompt/response logging
   dashboard/templates/          # Jinja2: index.html, finance_corrections.html
   seeds/                        # run_all + seed_{areas,categories,owners,users}
+openclaw/                       # local CLI package: client, parser, normalizer,
+                                # dedup, preview, mass_add (entrypoint)
 api/index.py                    # Vercel adapter (re-exports FastAPI app)
-migrations/                     # alembic env + 0001..0020 versions + manual_apply.sql
-tests/                          # pytest, SQLite in-memory via conftest.py
+migrations/                     # alembic env + manual_apply.sql + versions/0001..0020
+tests/                          # pytest, SQLite in-memory via conftest.py;
+                                # tests/openclaw/ covers the openclaw package
 Procfile                        # web: uvicorn ; worker: python -m app.bot.main
 ```
 
@@ -74,11 +77,20 @@ python -m app.bot.main
 # Tests
 pytest
 pytest tests/test_capture.py          # single file
+pytest tests/openclaw/                # all openclaw tests
 pytest -k "test_parse_amount"         # single test by name
 pytest --tb=short -q                  # terse output
+
+# OpenClaw mass-add CLI (requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+# HASTLEFAM_HOUSEHOLD_ID — bypasses FastAPI; talks to Supabase directly)
+python -m openclaw.mass_add "12.03 350 продукты / 14.03 +90000 зп"
+cat dump.txt | python -m openclaw.mass_add --confirm --json
 ```
 
-Tests use SQLite in-memory (no real DB needed). `conftest.py` sets dummy env vars before any app import so `Settings()` doesn't crash. The `db` fixture strips the `hastlefam` schema from `Base.metadata` (SQLite has no schemas) and restores it after teardown — keep this in mind when adding tests that touch new tables.
+Tests use SQLite in-memory (no real DB needed). `conftest.py` sets dummy env vars before any app import so `Settings()` doesn't crash. Two fixtures live there:
+
+- `db` — empty in-memory SQLite session. Strips the `hastlefam` schema from `Base.metadata` (SQLite has no schemas) and restores it after teardown — keep this in mind when adding tests that touch new tables.
+- `seeded_db` — `db` + a single Household / User / Owner / Account / Category fixture row using the `HOUSEHOLD_ID`, `USER_ID`, `OWNER_ID`, `ACCOUNT_ID`, `CATEGORY_ID` UUIDs exported from `tests/conftest.py`. Use it whenever a test needs a household to attach finance rows to.
 
 ---
 
@@ -149,6 +161,10 @@ Core finance logic (categorization, parsing, summaries) is entirely rule-based. 
 ### FX rates
 
 `fx_service.py` fetches daily rates from CBR XML feed (no API key, windows-1251 encoded). Rates stored as `1 foreign_currency = X RUB`. `convert_to_rub()` falls back up to 7 days if today's rate is missing. CBR-tracked codes: USD, EUR, PLN, AMD; USDT is upserted using the USD rate as a proxy. The `Currency` enum itself is `RUB, USD, USDT, EUR, AMD` — PLN has FX rates but is not in the enum.
+
+### SQL import pipeline (raw → normalized)
+
+The web service exposes `POST /finance/import/sql` (router `app/api/routers/finance.py`, service `import_service.py`). Each input row first lands in `raw_import_transactions`, then the normalizer produces a `Transaction`. Rows that can't be confidently mapped are inserted with `parse_status=needs_correction` and nullable `category_id` / `account_id` instead of being dropped, and surface in the `/` dashboard's `finance_corrections.html` view. Dedup is enforced via `dedup_fingerprint`. The `openclaw` CLI uses the same fingerprint rule (with source suffix `openclaw`) when bulk-inserting via Supabase REST.
 
 ### Auto-categorization rules
 
