@@ -50,3 +50,49 @@ run_recurring_reminders(days=3)
 - Owner/account autofill requires explicit source mapping in import payload.
 - Reminder job currently assumes users have valid Telegram IDs in `users`.
 - Legacy non-money modules remain in repo but are frozen for this MVP.
+
+## OpenClaw — mass add transactions
+
+CLI tool for bulk-adding transactions from voice transcriptions or text dumps.
+
+### Setup
+
+Set env vars (in addition to the existing `DATABASE_URL` etc.):
+
+```bash
+export SUPABASE_URL=https://<ref>.supabase.co
+export SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+export HASTLEFAM_HOUSEHOLD_ID=ed36b994-81e3-4fa0-b860-205381ba4681
+```
+
+### Usage
+
+```bash
+# Single-line or slash-separated
+python3 -m openclaw.mass_add "12.03 350 продукты / 14.03 +90000 зп"
+
+# Multiline via stdin
+cat transactions.txt | python3 -m openclaw.mass_add
+
+# Skip confirmation prompt (for agent/script use)
+python3 -m openclaw.mass_add "350 кафе" --confirm
+
+# Machine-readable JSON output
+python3 -m openclaw.mass_add "350 кафе" --confirm --json
+
+# Include duplicate-fingerprint rows (normally skipped)
+python3 -m openclaw.mass_add "350 кафе" --confirm --force-duplicates
+```
+
+### Input format
+
+One transaction per line (or separated by ` / `). Each line:
+- Optional date: `DD.MM`, `DD-MM`, `DD/MM`, `YYYY-MM-DD`, `вчера`, `позавчера` (defaults to today)
+- Amount: bare number or `+N` (+ marks income)
+- Optional currency: `USD`, `EUR`, `AMD`, `USDT` (defaults to `RUB`)
+- Income keywords: `зп`, `зарплата`, `доход`, `salary`, `income`
+- Transfer keyword: `перевод`, `transfer` → sets `is_internal_transfer=true`
+- Remainder: merchant description
+- `[planned]` suffix → marks as planned (not actual spend)
+
+Rows that can't be parsed get `parse_status=needs_correction` and are shown in the preview but still inserted — never silently dropped.
