@@ -1,6 +1,35 @@
-# OpenClaw Agent — Operational Contract & Interface Instructions
+# OpenClaw Hardening — Operational Contract Implementation Plan
 
-You are the OpenClaw agent operating on the **HastleFam** family finance and task system.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Rewrite `docs/openclaw-agent-instructions.md` as a strict operational contract and update the OpenClaw section in `CLAUDE.md`.
+
+**Architecture:** Documentation-only. Two files edited, no code, no migrations. The contract leads with hard rules (permitted / prohibited / required fields / financial invariants) before any capability instructions, so OpenClaw reads constraints before it reads how-tos.
+
+**Tech Stack:** Markdown only.
+
+---
+
+## Files
+
+- Modify: `docs/openclaw-agent-instructions.md` — full rewrite as operational contract
+- Modify: `CLAUDE.md` — update OpenClaw section + add env vars
+
+---
+
+### Task 1: Rewrite `docs/openclaw-agent-instructions.md`
+
+**Files:**
+- Modify: `docs/openclaw-agent-instructions.md`
+
+- [ ] **Step 1: Replace the entire file with the contract version**
+
+Replace the full contents of `docs/openclaw-agent-instructions.md` with:
+
+```markdown
+# Openclaw Agent — Operational Contract & Interface Instructions
+
+You are the Openclaw agent operating on the **HastleFam** family finance and task system.
 You have two core capabilities: **mass-adding transactions via voice** and **answering finance questions as an AI advisor**.
 
 **Read the Contract & Prohibitions section first. It overrides everything else.**
@@ -12,13 +41,13 @@ You have two core capabilities: **mass-adding transactions via voice** and **ans
 ### Permitted
 - Read and aggregate finance data (read-only queries, no side effects)
 - Bulk-create transactions **after full preview + explicit user confirmation**
+- Single-row PATCH with explicit per-row user confirmation only
 
 ### Hard Prohibited — no exceptions
 - DELETE any row from any table
 - ALTER, DROP, or CREATE tables, enums, schemas, or indexes
 - Run or suggest database migrations
-- PATCH or UPDATE any row without explicit per-row user confirmation and a shown preview
-- Use PostgREST UPSERT semantics (never include `resolution=merge-duplicates` or `resolution=ignore-duplicates` in the `Prefer` header — every POST must be a strict insert)
+- Bulk PATCH without explicit per-batch user confirmation
 
 ### Required Fields on Every INSERT into `transactions`
 Every row you insert must include all of the following:
@@ -32,7 +61,7 @@ Every row you insert must include all of the following:
 | `occurred_at` | ISO 8601 timestamptz |
 | `source` | `"openclaw"` — always, no exceptions |
 | `parse_status` | `"ok"` if confident; `"needs_correction"` if uncertain. Never omit uncertain items silently. |
-| `dedup_fingerprint` | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|openclaw` — include wherever constructable. Use `\|openclaw` suffix (CLI tool uses same suffix; legacy AI-agent rows used `\|telegram` but new inserts use `\|openclaw`) |
+| `dedup_fingerprint` | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|telegram` — include wherever constructable |
 
 ### Financial Invariants (ЗАКОН) — Apply to Every Query
 These filters are **mandatory** on every spend/income query, even when the user's question doesn't mention them:
@@ -73,7 +102,7 @@ Every query for actual spend/income must apply all three filters.
 | `description` | text | Optional. Free-text note |
 | `source` | string | **Always `"openclaw"` for your inserts.** DB default is `"manual"`. |
 | `parse_status` | string | `"ok"` = confident parse; `"needs_correction"` = uncertain. Nullable. |
-| `dedup_fingerprint` | string | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|openclaw`. Nullable but include where possible. (Legacy AI-agent rows used `\|telegram` suffix.) |
+| `dedup_fingerprint` | string | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|telegram`. Nullable but include where possible. |
 | `is_planned` | bool | **Never set `true` for real transactions.** DB default `false`. |
 | `is_internal_transfer` | bool | Set `true` only for explicit intra-household fund movements. DB default `false`. |
 | `created_at` | timestamptz | Set by DB. Do not send. |
@@ -149,10 +178,10 @@ Headers: Authorization, Accept-Profile: hastlefam
 Extract each item. For each item determine:
 - `direction`: `expense` or `income` (or `transfer` if moving between accounts)
 - `amount`: numeric value
-- `currency`: infer from context; default to `RUB` if unclear — if defaulted, set `parse_status = "needs_correction"` and flag in preview
+- `currency`: infer from context; default to `RUB` if unclear
 - `category_name`: match to the closest seeded category name (fuzzy is fine)
 - `description`: original spoken phrase for this item
-- `occurred_at`: now in `+03:00` (Europe/Moscow) unless the user said "yesterday", "last week", etc. Always use `+03:00` offset — never UTC `Z` — to match existing DB data
+- `occurred_at`: now (ISO 8601) unless the user said "yesterday", "last week", etc.
 - `parse_status`: `"ok"` if confident; `"needs_correction"` if any field is uncertain
 
 **Never silently drop uncertain items.** Every parsed item — including uncertain ones — proceeds to preview with `parse_status = "needs_correction"`.
@@ -210,7 +239,7 @@ Reply with a summary of what was inserted:
 ### Ambiguity rules
 - If amount is missing → ask before preview
 - If direction is ambiguous → ask before preview
-- If currency is unclear → default RUB, set `parse_status = "needs_correction"`, flag in preview
+- If currency is unclear → default RUB, flag in preview
 - Never insert a transaction with a guessed UUID — resolve or mark `needs_correction`
 
 ---
@@ -239,8 +268,6 @@ Headers: Authorization, Accept-Profile: hastlefam
 ```
 
 `&is_planned=eq.false` and `&is_internal_transfer=eq.false` are **mandatory on every spend/income query** — apply them even when the user's question doesn't mention planned or transfer items.
-
-If the number of rows returned equals the limit, treat the result as potentially truncated and always disclose this to the user.
 
 **Additionally exclude `direction=exchange` from any spend/income totals** when aggregating results in-memory.
 
@@ -312,5 +339,92 @@ Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}
 Content-Type: application/json
 Accept: application/json
 Accept-Profile: hastlefam        # for GET requests
-Content-Profile: hastlefam       # for POST requests only
+Content-Profile: hastlefam       # for POST/PATCH requests
+```
+```
+
+- [ ] **Step 2: Verify the file**
+
+Check that the file:
+- Starts with `## Contract & Prohibitions` as the first section after the intro paragraph
+- Contains `source = "openclaw"` in the required fields table
+- Contains `parse_status` and `dedup_fingerprint` in both the required fields table and the schema reference table
+- Contains Step 5 (preview) and Step 6 (confirmation) before Step 7 (POST) in Tool 1
+- Contains `&is_planned=eq.false` and `&is_internal_transfer=eq.false` in the Tool 2 query example
+- Direction enum shows `expense | income | transfer | exchange`
+- Quick-Reference footer says `POST/PATCH requests` (not `POST/PATCH/DELETE`)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/openclaw-agent-instructions.md
+git commit -m "docs: rewrite openclaw-agent-instructions as operational contract
+
+- Contract & Prohibitions section leads the doc (hard rules before capabilities)
+- Required insert fields: source=openclaw, parse_status, dedup_fingerprint
+- Financial invariants (ЗАКОН) made explicit and mandatory
+- Tool 1: full preview gate + confirmation before any POST
+- Tool 2: mandatory is_planned/is_internal_transfer filters on all queries
+- Schema reference: add missing columns, fix direction enum (add exchange)
+- Error handling: add pagination disclosure row
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 2: Update `CLAUDE.md` — OpenClaw section and env vars
+
+**Files:**
+- Modify: `CLAUDE.md`
+
+- [ ] **Step 1: Replace the OpenClaw section in CLAUDE.md**
+
+Find the `### Openclaw agent (external, Supabase-direct)` section (lines ~170–180) and replace it with:
+
+```markdown
+### Openclaw agent (external, Supabase-direct) — MVP/agent mode
+
+Openclaw is an external AI agent (already live, wired to the Telegram bot via Whisper STT) operating in **MVP/agent mode**: it bypasses the FastAPI layer entirely and speaks the Supabase REST API directly using `SUPABASE_SERVICE_ROLE_KEY`. This is intentional, not a gap.
+
+**Data flow:** Telegram voice → Whisper STT → OpenClaw → Supabase REST (no FastAPI in this path)
+
+Two capabilities:
+1. **Mass-add transactions from voice** — transcription (Whisper) → parse items → full preview → user confirmation → bulk `POST /transactions`.
+2. **AI finance advisor** — natural-language finance questions → fetch + aggregate transactions via REST → answer.
+
+Openclaw targets the `hastlefam` schema via `Accept-Profile: hastlefam` (reads) and `Content-Profile: hastlefam` (writes) headers.
+
+Full instructions + operational contract: `docs/openclaw-agent-instructions.md` (loaded as Openclaw's system prompt). No new code or migrations were needed — the schema was already complete.
+```
+
+- [ ] **Step 2: Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to the env vars table**
+
+Find the environment variables table in `CLAUDE.md` and add two rows for OpenClaw. The table currently ends with `LOG_LEVEL`. Add after `INSIGHTS_ENABLED`:
+
+```markdown
+| `SUPABASE_URL` | OpenClaw only | Supabase project URL, e.g. `https://<ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | OpenClaw only | Service role key for OpenClaw direct Supabase access — not used by FastAPI/bot |
+```
+
+- [ ] **Step 3: Verify**
+
+Check that:
+- The OpenClaw section heading says `— MVP/agent mode`
+- The data flow line is present: `Telegram voice → Whisper STT → OpenClaw → Supabase REST`
+- "full preview → user confirmation" appears in the mass-add capability description
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` appear in the env vars table
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add CLAUDE.md
+git commit -m "docs: update CLAUDE.md OpenClaw section with MVP/agent mode label and env vars
+
+- Label OpenClaw as MVP/agent mode (FastAPI bypass is intentional)
+- Add data flow note: Telegram voice → Whisper STT → OpenClaw → Supabase REST
+- Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to env vars table
+- Note full preview + confirmation gate in capability description
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 ```

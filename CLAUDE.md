@@ -167,6 +167,20 @@ Bot starts without Redis. When available it provides three things:
 - `event_log` DB table for domain events via `observability/event_logger.py`.
 - `observability/prompt_logger.py` for LLM prompt/response logging.
 
+### OpenClaw agent (external, Supabase-direct) — MVP/agent mode
+
+Openclaw is an external AI agent (already live, wired to the Telegram bot via Whisper STT) operating in **MVP/agent mode**: it bypasses the FastAPI layer entirely and speaks the Supabase REST API directly using `SUPABASE_SERVICE_ROLE_KEY`. This is intentional, not a gap.
+
+**Data flow:** Telegram voice → Whisper STT → OpenClaw → Supabase REST (no FastAPI in this path)
+
+Two capabilities:
+1. **Mass-add transactions from voice** — transcription (Whisper) → parse items → full preview → user confirmation → bulk `POST /transactions`.
+2. **AI finance advisor** — natural-language finance questions → fetch + aggregate transactions via REST → answer.
+
+Openclaw targets the `hastlefam` schema via `Accept-Profile: hastlefam` (reads) and `Content-Profile: hastlefam` (writes) headers.
+
+Full instructions + operational contract: `docs/openclaw-agent-instructions.md` (loaded as Openclaw's system prompt). No new code or migrations were needed — the schema was already complete.
+
 ---
 
 ## Key conventions
@@ -178,7 +192,7 @@ Bot starts without Redis. When available it provides three things:
 - **Handler router order matters** — `cancel` first, `capture_router` (catch-all `@router.message()`) last.
 - **FSM states** — all FSM flows must have `/cancel` escape; always add `/cancel` hint to prompts.
 - **Tags** — always lowercased before storage (see `expense_parser.py` lines 140–141).
-- **`dedup_fingerprint`** — SHA-256 of `household_id|date|amount|currency|merchant|direction|telegram`; direction is included so income+expense with same amount+merchant are not treated as duplicates.
+- **`dedup_fingerprint`** — SHA-256 of `household_id|date|amount|currency|merchant|direction|{source}`; direction is included so income+expense with same amount+merchant are not treated as duplicates. Source suffix identifies insert origin: `openclaw` for CLI/agent inserts, legacy rows used `telegram`.
 
 ---
 
@@ -193,6 +207,8 @@ Bot starts without Redis. When available it provides three things:
 | `OPENAI_MODEL` | no | default `gpt-4.1-mini` |
 | `REDIS_URL` | no | default `redis://localhost:6379/0` |
 | `INSIGHTS_ENABLED` | no | default `false`; enables OpenAI insights |
+| `SUPABASE_URL` | OpenClaw only | Supabase project URL, e.g. `https://<ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | OpenClaw only | Service role key for OpenClaw direct Supabase access — not used by FastAPI/bot |
 | `APP_ENV` | no | default `local` |
 | `LOG_LEVEL` | no | default `INFO` |
 
