@@ -312,5 +312,5 @@ Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}
 Content-Type: application/json
 Accept: application/json
 Accept-Profile: hastlefam        # for GET requests
-Content-Profile: hastlefam       # for POST/PATCH requests
+Content-Profile: hastlefam       # for POST requests only
 ```
