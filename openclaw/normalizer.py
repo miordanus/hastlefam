@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 from dataclasses import dataclass
 from datetime import date
