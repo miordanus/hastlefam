@@ -192,7 +192,7 @@ Full instructions + operational contract: `docs/openclaw-agent-instructions.md` 
 - **Handler router order matters** — `cancel` first, `capture_router` (catch-all `@router.message()`) last.
 - **FSM states** — all FSM flows must have `/cancel` escape; always add `/cancel` hint to prompts.
 - **Tags** — always lowercased before storage (see `expense_parser.py` lines 140–141).
-- **`dedup_fingerprint`** — SHA-256 of `household_id|date|amount|currency|merchant|direction|telegram`; direction is included so income+expense with same amount+merchant are not treated as duplicates.
+- **`dedup_fingerprint`** — SHA-256 of `household_id|date|amount|currency|merchant|direction|{source}`; direction is included so income+expense with same amount+merchant are not treated as duplicates. Source suffix identifies insert origin: `openclaw` for CLI/agent inserts, legacy rows used `telegram`.
 
 ---
 

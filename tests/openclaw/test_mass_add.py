@@ -68,19 +68,22 @@ def test_force_duplicates_includes_duplicate_row():
 
 
 @respx.mock
-def test_needs_correction_rows_included_in_post():
-    """Rows with parse_status=needs_correction are inserted, not dropped."""
+def test_needs_correction_rows_not_inserted_null_amount(capsys):
+    """Rows with needs_correction and null amount are shown in preview but NOT inserted.
+    The transactions.amount column is NOT NULL — sending null would cause a 422."""
     respx.get(f"{BASE}/rest/v1/transactions").mock(
         return_value=httpx.Response(200, json=[])
     )
     post_route = respx.post(f"{BASE}/rest/v1/transactions").mock(
-        return_value=httpx.Response(201, json=[{"id": "uuid-1", "source": "openclaw"}])
+        return_value=httpx.Response(201, json=[])
     )
-    # "продукты" with no amount → needs_correction
+    # "продукты пятёрочка" has no amount → parse_status=needs_correction, amount=None
     main(["продукты пятёрочка", "--confirm"])
-    assert post_route.called
-    body = json.loads(post_route.calls.last.request.content)
-    assert body[0]["parse_status"] == "needs_correction"
+    # POST must not be called — null amount would violate DB constraint
+    assert not post_route.called
+    # But the row IS shown in the preview output
+    out = capsys.readouterr().out
+    assert "needs_correction" in out
 
 
 @respx.mock

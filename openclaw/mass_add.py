@@ -61,20 +61,26 @@ def main(argv: list[str] | None = None) -> int:
                     print("Cancelled.")
                     return 0
 
+            # amount is NOT NULL in the DB — rows with null amount cannot be inserted
             insertable = [
                 r for r in deduped_rows
-                if not r.is_duplicate or args.force_duplicates
+                if (not r.is_duplicate or args.force_duplicates) and r.amount is not None
+            ]
+            uninsertable_correction = [
+                r for r in deduped_rows
+                if r.amount is None and not r.is_duplicate
             ]
 
+            skipped = sum(1 for r in deduped_rows if r.is_duplicate and not args.force_duplicates)
+
             if not insertable:
-                render_summary(0, 0, sum(1 for r in deduped_rows if r.is_duplicate), [], json_output=args.json_output)
+                render_summary(0, len(uninsertable_correction), skipped, [], json_output=args.json_output)
                 return 0
 
             inserted = client.post("transactions", rows=[_to_insert_dict(r) for r in insertable])
             ids = [str(r.get("id", "")) for r in inserted]
 
-            needs_correction_count = sum(1 for r in insertable if r.parse_status == "needs_correction")
-            skipped = sum(1 for r in deduped_rows if r.is_duplicate and not args.force_duplicates)
+            needs_correction_count = len(uninsertable_correction)
 
             render_summary(len(ids), needs_correction_count, skipped, ids, json_output=args.json_output)
 

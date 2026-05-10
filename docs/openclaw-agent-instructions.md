@@ -32,7 +32,7 @@ Every row you insert must include all of the following:
 | `occurred_at` | ISO 8601 timestamptz |
 | `source` | `"openclaw"` — always, no exceptions |
 | `parse_status` | `"ok"` if confident; `"needs_correction"` if uncertain. Never omit uncertain items silently. |
-| `dedup_fingerprint` | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|telegram` — include wherever constructable |
+| `dedup_fingerprint` | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|openclaw` — include wherever constructable. Use `\|openclaw` suffix (CLI tool uses same suffix; legacy AI-agent rows used `\|telegram` but new inserts use `\|openclaw`) |
 
 ### Financial Invariants (ЗАКОН) — Apply to Every Query
 These filters are **mandatory** on every spend/income query, even when the user's question doesn't mention them:
@@ -73,7 +73,7 @@ Every query for actual spend/income must apply all three filters.
 | `description` | text | Optional. Free-text note |
 | `source` | string | **Always `"openclaw"` for your inserts.** DB default is `"manual"`. |
 | `parse_status` | string | `"ok"` = confident parse; `"needs_correction"` = uncertain. Nullable. |
-| `dedup_fingerprint` | string | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|telegram`. Nullable but include where possible. |
+| `dedup_fingerprint` | string | SHA-256 of `household_id\|date\|amount\|currency\|merchant\|direction\|openclaw`. Nullable but include where possible. (Legacy AI-agent rows used `\|telegram` suffix.) |
 | `is_planned` | bool | **Never set `true` for real transactions.** DB default `false`. |
 | `is_internal_transfer` | bool | Set `true` only for explicit intra-household fund movements. DB default `false`. |
 | `created_at` | timestamptz | Set by DB. Do not send. |
