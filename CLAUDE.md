@@ -167,7 +167,7 @@ Bot starts without Redis. When available it provides three things:
 - `event_log` DB table for domain events via `observability/event_logger.py`.
 - `observability/prompt_logger.py` for LLM prompt/response logging.
 
-### Openclaw agent (external, Supabase-direct) — MVP/agent mode
+### OpenClaw agent (external, Supabase-direct) — MVP/agent mode
 
 Openclaw is an external AI agent (already live, wired to the Telegram bot via Whisper STT) operating in **MVP/agent mode**: it bypasses the FastAPI layer entirely and speaks the Supabase REST API directly using `SUPABASE_SERVICE_ROLE_KEY`. This is intentional, not a gap.
 
