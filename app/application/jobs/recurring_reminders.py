@@ -8,6 +8,7 @@ from aiogram import Bot
 from sqlalchemy.orm import Session
 
 from app.application.services.finance_service import FinanceService
+from app.domain.enums import TransactionDirection
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.db.models import Debt, EventLog, RecurringPayment, Transaction, User
 from app.infrastructure.db.session import SessionLocal
@@ -30,35 +31,51 @@ def run_recurring_reminders(days: int = 3) -> dict:
         bot = Bot(token=settings.telegram_bot_token)
         try:
             for household_id in households:
-                upcoming = FinanceService(db).upcoming_payments(str(household_id), days)
-                for item in upcoming:
-                    recurring_id = uuid.UUID(item["id"])
-                    if _already_sent(db, household_id, recurring_id):
+                today = datetime.now(timezone.utc).date()
+                soon = today + timedelta(days=days)
+                today_dt = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+                until_dt = datetime(soon.year, soon.month, soon.day, 23, 59, 59, tzinfo=timezone.utc)
+
+                planned_txs = db.query(Transaction).filter(
+                    Transaction.household_id == household_id,
+                    Transaction.is_planned.is_(True),
+                    Transaction.is_skipped.is_(False),
+                    Transaction.occurred_at >= today_dt,
+                    Transaction.occurred_at <= until_dt,
+                    Transaction.direction != TransactionDirection.TRANSFER,
+                    Transaction.direction != TransactionDirection.EXCHANGE,
+                ).order_by(Transaction.occurred_at.asc()).all()
+
+                for tx in planned_txs:
+                    if _already_sent(db, household_id, tx.id):
                         skipped += 1
                         continue
-                    text = f"Reminder: {item['title']} due {item['due_date']} ({item['amount']} {item['currency']})"
-                    users = db.query(User).filter(User.household_id == household_id, User.is_active.is_(True)).all()
+                    due_str = tx.occurred_at.strftime("%d.%m")
+                    amount_int = int(tx.amount) if tx.amount == int(tx.amount) else tx.amount
+                    currency_str = tx.currency.value if tx.currency else "RUB"
+                    reminder_text = f"📅 Платёж: {tx.merchant_raw} — {amount_int} {currency_str} ({due_str})"
+                    users = db.query(User).filter(
+                        User.household_id == household_id, User.is_active.is_(True)
+                    ).all()
                     for user in users:
                         try:
-                            asyncio.run(_send(bot, int(user.telegram_id), text))
+                            asyncio.run(_send(bot, int(user.telegram_id), reminder_text))
                         except Exception as exc:
-                            logger.warning('reminder.send_failed', user_id=str(user.id), error=str(exc))
+                            logger.warning("reminder.send_failed", user_id=str(user.id), error=str(exc))
                             continue
                     db.add(
                         EventLog(
                             household_id=household_id,
                             user_id=None,
                             event_type="recurring_reminder_sent",
-                            entity_type="recurring_payment",
-                            entity_id=recurring_id,
-                            payload={"due_date": item["due_date"], "days": days},
+                            entity_type="planned_transaction",
+                            entity_id=tx.id,
+                            payload={"due_date": tx.occurred_at.date().isoformat(), "days": days},
                             severity="info",
                         )
                     )
                     sent += 1
                 # ── Debt due-date reminders ─────────────────────────────
-                today = datetime.now(timezone.utc).date()
-                soon = today + timedelta(days=days)
                 debt_rows = db.query(Debt).filter(
                     Debt.household_id == household_id,
                     Debt.settled_at.is_(None),
@@ -155,14 +172,15 @@ def run_recurring_reminders(days: int = 3) -> dict:
     return {"sent": sent, "skipped_duplicates": skipped}
 
 
-def _already_sent(db: Session, household_id: uuid.UUID, recurring_id: uuid.UUID) -> bool:
+def _already_sent(db: Session, household_id: uuid.UUID, tx_id: uuid.UUID) -> bool:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=20)
     hit = (
         db.query(EventLog)
         .filter(
             EventLog.household_id == household_id,
             EventLog.event_type == "recurring_reminder_sent",
-            EventLog.entity_id == recurring_id,
+            EventLog.entity_type == "planned_transaction",
+            EventLog.entity_id == tx_id,
             EventLog.created_at >= cutoff,
         )
         .first()
