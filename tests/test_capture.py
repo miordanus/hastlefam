@@ -173,3 +173,39 @@ def test_fingerprint_differs_by_currency():
     f1 = fp("h1", Decimal("100"), "RUB", "shop", "2026-03-13")
     f2 = fp("h1", Decimal("100"), "USD", "shop", "2026-03-13")
     assert f1 != f2
+
+
+# ─── Planned flag [план] ──────────────────────────────────────────────────────
+
+def test_plan_token_sets_is_planned():
+    r = parse("15.06 5000 аренда [план]")
+    assert r.ok
+    assert r.is_planned is True
+    assert r.merchant == "аренда"
+    assert r.amount == Decimal("5000")
+
+
+def test_plan_token_english():
+    r = parse("5000 netflix [plan]")
+    assert r.ok
+    assert r.is_planned is True
+    assert r.merchant == "netflix"
+
+
+def test_no_plan_token_is_false():
+    r = parse("5000 продукты")
+    assert r.is_planned is False
+
+
+def test_plan_token_with_tag():
+    r = parse("5000 аренда #жильё [план]")
+    assert r.is_planned is True
+    assert r.primary_tag == "жильё"
+    assert r.merchant == "аренда"
+
+
+def test_plan_token_income():
+    r = parse("+50000 зп [план]")
+    assert r.ok
+    assert r.is_planned is True
+    assert r.direction == TransactionDirection.INCOME

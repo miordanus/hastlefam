@@ -64,6 +64,9 @@ _AMOUNT_RE = re.compile(r"^[+]?(\d+(?:[\.,]\d{1,2})?)")
 # Income prefix: starts with +
 _INCOME_RE = re.compile(r"^\+")
 
+# Planned-payment marker: [план] or [plan] (case-insensitive, any position)
+_PLANNED_RE = re.compile(r"\[план\]|\[plan\]", re.IGNORECASE)
+
 
 # ─── Result ────────────────────────────────────────────────────────────────────
 
@@ -88,6 +91,7 @@ class ParseResult:
     # parse quality
     ok: bool = True
     error: Optional[str] = None
+    is_planned: bool = False
 
     @property
     def has_tag(self) -> bool:
@@ -100,6 +104,8 @@ def parse(text: str) -> ParseResult:
     Deterministic. No LLM. No external calls.
     """
     text = text.strip()
+    is_planned = bool(_PLANNED_RE.search(text))
+    text = _PLANNED_RE.sub("", text).strip()
     today = _today()
 
     # ── Exchange pattern ────────────────────────────────────────────────────
@@ -184,6 +190,7 @@ def parse(text: str) -> ParseResult:
         extra_tags=extra_tags,
         occurred_date=occurred_date,
         date_explicit=date_explicit,
+        is_planned=is_planned,
     )
 
 
