@@ -141,7 +141,10 @@ async def _capture_text(message: Message, text: str) -> None:
                 if draft_key is not None:
                     await ask_duplicate_confirm(message, result, draft_key)
                 else:
-                    await message.answer("Похоже на дубль, пропустил.")
+                    await message.answer(
+                        "⚠️ Похоже на повтор — такая запись уже была сегодня.\n"
+                        "Если это другая трата, отправь снова."
+                    )
                 return
 
             from app.application.services.finance_service import FinanceService
