@@ -173,7 +173,7 @@ async def _capture_text(message: Message, text: str) -> None:
                 dedup_fingerprint=fingerprint,
                 primary_tag=effective_tag,
                 extra_tags=result.extra_tags or [],
-                is_planned=False,  # ЗАКОН: capture = actual
+                is_planned=result.is_planned,
             )
             # Mark ATM top-ups and similar intra-household transfers so they are
             # excluded from income/expense totals (ЗАКОН: is_internal_transfer=True).
@@ -208,13 +208,17 @@ async def _capture_text(message: Message, text: str) -> None:
         tag_missing=effective_tag is None,
         date_explicit=result.date_explicit,
         currency_explicit=result.currency_explicit,
-        date_is_future=result.occurred_date > today,
+        date_is_future=result.occurred_date > today and not result.is_planned,
     )
 
     from app.domain.enums import TransactionDirection as TD
     direction_label = " (доход)" if result.direction == TD.INCOME else ""
 
-    if effective_tag:
+    if result.is_planned:
+        due_str = result.occurred_date.strftime("%d.%m")
+        tag_part = f" · #{effective_tag}" if effective_tag else ""
+        body = f"📅 Запланировал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant}{tag_part} (до {due_str})"
+    elif effective_tag:
         auto_hint = " 🤖" if autocat_applied else ""
         body = f"✅ Записал{direction_label}.\n{result.amount} {result.currency.value} · {result.merchant} · #{effective_tag}{auto_hint}"
     else:
