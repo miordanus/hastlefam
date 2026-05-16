@@ -10,12 +10,15 @@ from app.infrastructure.config.settings import get_settings
 @lru_cache
 def get_engine():
     settings = get_settings()
+    url = settings.database_url
+    if url.startswith("sqlite"):
+        return create_engine(url)
     return create_engine(
-        settings.database_url,
+        url,
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
-        pool_timeout=10,          # fail fast instead of hanging forever
+        pool_timeout=10,
         connect_args={'options': '-csearch_path=hastlefam'},
     )
 

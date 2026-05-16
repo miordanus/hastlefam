@@ -64,6 +64,58 @@ def corrections_page(
     )
 
 
+@router.get("/report", response_class=HTMLResponse)
+def report_page(
+    request: Request,
+    household_id: str = Query(default=None),
+    month: str = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    import datetime as _dt
+    report_data = None
+    if household_id:
+        if month:
+            try:
+                dt = _dt.datetime.strptime(month, "%Y-%m")
+                year, mon = dt.year, dt.month
+            except ValueError:
+                today = _dt.date.today()
+                year, mon = today.year, today.month
+        else:
+            today = _dt.date.today()
+            year, mon = today.year, today.month
+        report_data = FinanceService(db).monthly_report(household_id, year, mon)
+    return templates.TemplateResponse(
+        "monthly_report.html",
+        {
+            "request": request,
+            "report_data": report_data,
+            "today_iso": _dt.date.today().isoformat(),
+        },
+    )
+
+
+@router.get("/report/data")
+def report_data(
+    household_id: str = Query(...),
+    month: str = Query(default=None, description="YYYY-MM, defaults to current month"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """JSON endpoint — returns all data for the monthly report UI."""
+    import datetime as _dt
+    if month:
+        try:
+            dt = _dt.datetime.strptime(month, "%Y-%m")
+            year, mon = dt.year, dt.month
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=422, detail="month must be YYYY-MM")
+    else:
+        today = _dt.date.today()
+        year, mon = today.year, today.month
+    return FinanceService(db).monthly_report(household_id, year, mon)
+
+
 @router.post("/corrections/{transaction_id}")
 def update_correction(
     transaction_id: str,

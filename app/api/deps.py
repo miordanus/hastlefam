@@ -3,8 +3,5 @@ from app.infrastructure.db.session import SessionLocal
 
 
 def get_db() -> Generator:
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         yield db
-    finally:
-        db.close()
