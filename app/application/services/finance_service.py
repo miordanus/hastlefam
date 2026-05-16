@@ -703,8 +703,118 @@ class FinanceService:
             "fx_unavailable": fx_unavailable,
         }
 
+    # ─── Monthly report (UI) ─────────────────────────────────────────────────
+
+    def monthly_report(self, household_id: str, year: int, month: int) -> dict[str, Any]:
+        """Return all data needed by the monthly report UI.
+
+        Includes both planned and actual transactions (ЗАКОН filters applied).
+        Running balance is computed client-side from this data + snapshots.
+        """
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        last_day = calendar.monthrange(year, month)[1]
+        start_dt = datetime(year, month, 1, tzinfo=timezone.utc)
+        end_dt = datetime(year, month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+
+        accounts = (
+            self.db.query(Account)
+            .filter(Account.household_id == hid, Account.is_active.is_(True))
+            .all()
+        )
+
+        txs = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.occurred_at >= start_dt,
+                Transaction.occurred_at <= end_dt,
+                Transaction.is_internal_transfer.is_(False),
+                Transaction.is_skipped.is_(False),
+                Transaction.direction != TransactionDirection.EXCHANGE,
+            )
+            .order_by(Transaction.occurred_at.asc())
+            .all()
+        )
+
+        snapshots: dict[str, dict | None] = {}
+        for acc in accounts:
+            snap = (
+                self.db.query(BalanceSnapshot)
+                .filter(
+                    BalanceSnapshot.account_id == acc.id,
+                    BalanceSnapshot.created_at < start_dt,
+                )
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            snapshots[str(acc.id)] = (
+                {"actual_balance": float(snap.actual_balance)} if snap else None
+            )
+
+        tag_map: dict[str, float] = {}
+        for tx in txs:
+            if tx.is_planned or tx.direction != TransactionDirection.EXPENSE:
+                continue
+            tag = tx.primary_tag or "(без тега)"
+            tag_map[tag] = tag_map.get(tag, 0.0) + float(tx.amount)
+
+        tag_summary = [
+            {"tag": t, "total_rub": v}
+            for t, v in sorted(tag_map.items(), key=lambda x: -x[1])
+        ]
+
+        return {
+            "year": year,
+            "month": month,
+            "accounts": [
+                {"id": str(a.id), "name": a.name, "currency": a.currency.value}
+                for a in accounts
+            ],
+            "snapshots": snapshots,
+            "transactions": [
+                {
+                    "id": str(tx.id),
+                    "occurred_at": tx.occurred_at.strftime("%Y-%m-%d"),
+                    "direction": tx.direction.value,
+                    "amount": float(tx.amount),
+                    "currency": tx.currency.value if tx.currency else "rub",
+                    "merchant_raw": tx.merchant_raw or "",
+                    "primary_tag": tx.primary_tag,
+                    "account_id": str(tx.account_id) if tx.account_id else None,
+                    "is_planned": tx.is_planned,
+                    "is_internal_transfer": tx.is_internal_transfer,
+                    "status": _derive_status(tx),
+                }
+                for tx in txs
+            ],
+            "tag_summary": tag_summary,
+        }
+
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 
     def upcoming_payments(self, household_id: str, days: int = 7, until_date: date | None = None) -> list[dict[str, Any]]:
         """Alias → upcoming_planned() for backward compatibility with API routes."""
         return self.upcoming_planned(household_id, days=days, until_date=until_date)
+
+
+def _derive_status(tx: Transaction) -> str:
+    """Derive UI display status from transaction state.
+
+    actual    — normal recorded transaction
+    planned   — future planned entry not yet overdue
+    overdue   — planned entry whose date has passed
+    unplanned — user explicitly marked with [сюрприз] or [surprise]
+    """
+    today = date.today()
+    occurred = tx.occurred_at.date() if hasattr(tx.occurred_at, "date") else tx.occurred_at
+
+    if tx.is_planned:
+        if occurred <= today:
+            return "overdue"
+        return "planned"
+
+    raw = (tx.merchant_raw or "").lower()
+    if "[сюрприз]" in raw or "[surprise]" in raw:
+        return "unplanned"
+
+    return "actual"
