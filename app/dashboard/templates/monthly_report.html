@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HastleFam — Май 2026</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:#09090b; color:#e4e4e7; font-family:'Inter',sans-serif; font-size:14px; }
+.mono { font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; }
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-track { background:#18181b; }
+::-webkit-scrollbar-thumb { background:#3f3f46; border-radius:3px; }
+
+/* layout */
+.container { max-width:1400px; margin:0 auto; padding:0 24px; }
+.stack { display:flex; flex-direction:column; gap:20px; }
+.row { display:flex; gap:12px; flex-wrap:wrap; }
+
+/* header */
+header { position:sticky; top:0; z-index:50; background:rgba(9,9,11,.96); backdrop-filter:blur(12px); border-bottom:1px solid #1f1f23; }
+.header-top { padding:12px 0 0; display:flex; align-items:center; justify-content:space-between; }
+.header-bottom { display:flex; align-items:flex-end; justify-content:space-between; }
+.wordmark { font-size:15px; font-weight:700; letter-spacing:-.02em; color:#fff; }
+.mock-badge { font-size:10px; background:#27272a; border:1px solid #3f3f46; border-radius:4px; padding:2px 8px; color:#71717a; letter-spacing:.06em; text-transform:uppercase; margin-left:8px; }
+
+/* tabs */
+.tab-nav { display:flex; gap:0; margin-top:8px; }
+.tab-btn { padding:10px 18px; font-size:13px; font-weight:500; background:transparent; border:none; color:#71717a; cursor:pointer; border-bottom:2px solid transparent; transition:color .15s,border-color .15s; margin-bottom:-1px; white-space:nowrap; }
+.tab-btn:hover { color:#a1a1aa; }
+.tab-btn.active { color:#fff; border-bottom-color:#6366f1; }
+
+/* period picker */
+.period-picker { display:flex; align-items:center; gap:8px; padding-bottom:10px; }
+.period-btn { background:transparent; border:none; color:#52525b; font-size:18px; cursor:pointer; padding:0 4px; line-height:1; transition:color .15s; }
+.period-btn:hover { color:#a1a1aa; }
+.period-label { font-size:13px; font-weight:500; color:#d4d4d8; min-width:90px; text-align:center; }
+
+/* currency switcher */
+.cur-group { display:flex; background:#18181b; border:1px solid #27272a; border-radius:8px; padding:2px; gap:1px; }
+.cur-btn { padding:4px 12px; font-size:12px; font-weight:600; background:transparent; border:none; color:#71717a; cursor:pointer; border-radius:6px; transition:all .15s; font-family:'JetBrains Mono',monospace; }
+.cur-btn.active { background:#3f3f46; color:#fff; }
+
+/* tab views */
+.tab-view { display:none; padding:20px 0; }
+.tab-view.active { display:flex; flex-direction:column; gap:20px; }
+
+/* cards */
+.card { background:#18181b; border:1px solid #27272a; border-radius:12px; padding:16px 20px; }
+.card.highlight { background:#27272a; border-color:#3f3f46; }
+.card.danger { background:#1a0505; border-color:rgba(127,29,29,.4); }
+.card-label { font-size:11px; font-weight:500; color:#71717a; text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; }
+.card-value { font-size:22px; font-weight:600; }
+.card-sub { font-size:11px; color:#71717a; margin-top:3px; }
+
+/* alerts */
+.alert { border-radius:8px; padding:10px 14px; font-size:13px; display:flex; align-items:flex-start; gap:10px; }
+.alert + .alert { margin-top:8px; }
+.alert-amber { background:#1c1002; border:1px solid #78350f; color:#fbbf24; }
+.alert-rose  { background:#1a0505; border:1px solid #7f1d1d; color:#fca5a5; }
+.alert-zinc  { background:#18181b; border:1px solid #3f3f46; color:#a1a1aa; }
+
+/* badges */
+.badge { display:inline-flex; align-items:center; padding:2px 7px; border-radius:4px; font-size:10px; font-weight:600; letter-spacing:.03em; white-space:nowrap; }
+.badge-actual    { background:#052e16; color:#4ade80; border:1px solid #14532d; }
+.badge-planned   { background:#1e3a5f; color:#93c5fd; border:1px solid #1d4ed8; }
+.badge-matched   { background:#2e1065; color:#c4b5fd; border:1px solid #6d28d9; }
+.badge-overdue   { background:#451a03; color:#fcd34d; border:1px solid #b45309; }
+.badge-mismatch  { background:#4c0519; color:#fca5a5; border:1px solid #991b1b; }
+.badge-unplanned { background:#27272a; color:#a1a1aa; border:1px solid #3f3f46; }
+.tag-pill { background:#27272a; border:1px solid #3f3f46; border-radius:4px; padding:2px 6px; font-size:11px; color:#a1a1aa; }
+
+/* filters */
+.filter-group { display:flex; background:#18181b; border:1px solid #27272a; border-radius:8px; padding:3px; }
+.filter-btn { padding:5px 14px; font-size:13px; font-weight:500; background:transparent; border:none; color:#71717a; cursor:pointer; border-radius:6px; transition:all .15s; }
+.filter-btn.active { background:#3f3f46; color:#fff; }
+select { background:#18181b; border:1px solid #27272a; border-radius:8px; padding:6px 12px; font-size:13px; color:#d4d4d8; outline:none; cursor:pointer; }
+select:hover { border-color:#3f3f46; }
+
+/* ledger table */
+.ledger-wrap { background:#18181b; border:1px solid #27272a; border-radius:12px; overflow:hidden; }
+.ledger-table { width:100%; border-collapse:collapse; }
+.ledger-table th { font-size:11px; font-weight:500; color:#71717a; text-transform:uppercase; letter-spacing:.06em; padding:10px 12px; border-bottom:1px solid #27272a; white-space:nowrap; }
+.ledger-table td { padding:10px 12px; border-bottom:1px solid #1f1f23; }
+.ledger-row:hover { background:#1c1c22; cursor:pointer; }
+.ledger-row.future td { opacity:.65; }
+.ledger-row.danger .bal-cell { color:#f87171 !important; font-weight:600; }
+
+/* summary table (quarterly/yearly) */
+.summary-table { width:100%; border-collapse:collapse; }
+.summary-table th { font-size:11px; font-weight:500; color:#52525b; text-transform:uppercase; letter-spacing:.05em; padding:10px 16px; border-bottom:1px solid #1f1f23; }
+.summary-table th:first-child { padding-left:20px; }
+.summary-table th:last-child { padding-right:20px; }
+.summary-table td { padding:11px 16px; font-size:13px; border-bottom:1px solid #1f1f23; }
+.summary-table td:first-child { padding-left:20px; }
+.summary-table td:last-child { padding-right:20px; }
+.summary-table tfoot td { border-top:1px solid #3f3f46; border-bottom:none; font-weight:600; }
+
+/* side panel */
+.overlay { position:fixed; inset:0; z-index:99; display:none; }
+.overlay.open { display:block; }
+.panel { position:fixed; top:0; right:0; height:100vh; width:420px; background:#0c0c0e; border-left:1px solid #27272a; overflow-y:auto; z-index:100; transform:translateX(100%); transition:transform .22s cubic-bezier(.4,0,.2,1); box-shadow:-16px 0 48px rgba(0,0,0,.6); }
+.panel.open { transform:translateX(0); }
+.panel-field { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #1f1f23; font-size:13px; }
+.panel-field:last-child { border-bottom:none; }
+
+footer { font-size:11px; color:#3f3f46; text-align:center; padding:12px 0 24px; }
+
+.sparkline { display:inline-flex; align-items:flex-end; gap:1px; height:20px; }
+.sparkline span { width:6px; border-radius:1px 1px 0 0; min-height:2px; display:inline-block; }
+</style>
+<!-- Jinja2 data islands — type="application/json" means browser never executes these -->
+<script type="application/json" id="report-data">{{ report_data | tojson }}</script>
+<script type="application/json" id="today-data">"{{ today_iso }}"</script>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header>
+  <div class="container">
+    <div class="header-top">
+      <div style="display:flex;align-items:center;">
+        <span class="wordmark">Hastlefam</span>
+        <span class="mock-badge">MOCK</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding-bottom:2px;">
+        <span style="font-size:11px;color:#52525b;">Показать в</span>
+        <div class="cur-group" id="cur-group">
+          <button class="cur-btn active" data-cur="rub" onclick="setCurrency('rub')">₽ RUB</button>
+          <button class="cur-btn" data-cur="usd" onclick="setCurrency('usd')">$ USD</button>
+        </div>
+      </div>
+    </div>
+    <div class="header-bottom">
+      <nav class="tab-nav" id="main-tabs">
+        <button class="tab-btn active" data-tab="monthly"   onclick="switchTab('monthly')">Месяц</button>
+        <button class="tab-btn"        data-tab="quarterly" onclick="switchTab('quarterly')">Квартал</button>
+        <button class="tab-btn"        data-tab="yearly"    onclick="switchTab('yearly')">Год</button>
+        <button class="tab-btn"        data-tab="annual"    onclick="switchTab('annual')">Годовой отчёт</button>
+      </nav>
+      <div class="period-picker">
+        <button class="period-btn">‹</button>
+        <span class="period-label" id="period-label">Май 2026</span>
+        <button class="period-btn">›</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- ═══ MONTHLY ═══ -->
+  <div class="tab-view active" id="tab-monthly">
+
+    <div class="row" id="summary-cards"></div>
+    <div id="alerts-block"></div>
+
+    <!-- cashflow chart -->
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <span style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;">Кэшфлоу — Май 2026</span>
+        <div style="display:flex;gap:16px;font-size:11px;color:#71717a;">
+          <span style="display:flex;align-items:center;gap:5px;"><span style="width:20px;height:2px;background:#10b981;display:inline-block;border-radius:1px;"></span>Факт</span>
+          <span style="display:flex;align-items:center;gap:5px;"><span style="width:20px;height:2px;background:#60a5fa;display:inline-block;border-radius:1px;opacity:.7;"></span>Прогноз</span>
+        </div>
+      </div>
+      <canvas id="cashflowChart" height="85"></canvas>
+    </div>
+
+    <!-- ledger -->
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;">Журнал</span>
+          <span id="ledger-count" style="font-size:12px;color:#52525b;"></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div class="filter-group" id="view-toggle">
+            <button class="filter-btn active" data-view="all">Всё</button>
+            <button class="filter-btn" data-view="actual">Факт</button>
+            <button class="filter-btn" data-view="planned">План</button>
+          </div>
+          <select id="filter-account">
+            <option value="all">Все счета</option>
+            <option value="acc-1">Тинькофф</option>
+            <option value="acc-2">USD Наличные</option>
+          </select>
+          <select id="filter-status">
+            <option value="all">Все статусы</option>
+            <option value="actual">Факт</option>
+            <option value="planned">План</option>
+            <option value="matched">Совпало</option>
+            <option value="overdue">Просрочен</option>
+            <option value="mismatch">Расхождение</option>
+            <option value="unplanned">Сюрприз</option>
+          </select>
+        </div>
+      </div>
+      <div class="ledger-wrap">
+        <div style="overflow-x:auto;">
+          <table class="ledger-table">
+            <thead>
+              <tr>
+                <th style="text-align:left;">Дата</th>
+                <th style="text-align:left;">Статус</th>
+                <th style="text-align:left;">Тип</th>
+                <th style="text-align:left;">Описание</th>
+                <th style="text-align:left;">Тег</th>
+                <th style="text-align:right;">Сумма</th>
+                <th style="text-align:right;">Баланс</th>
+              </tr>
+            </thead>
+            <tbody id="ledger-body"></tbody>
+          </table>
+          <div id="ledger-empty" style="display:none;padding:48px;text-align:center;color:#52525b;font-size:13px;">Нет записей</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- tag analytics -->
+    <div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <span style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;">По тегам</span>
+        <span id="tag-period-label" style="font-size:12px;color:#52525b;"></span>
+      </div>
+      <div class="ledger-wrap">
+        <div style="overflow-x:auto;">
+          <table class="ledger-table" id="tag-table">
+            <thead>
+              <tr>
+                <th style="text-align:left;">Тег</th>
+                <th style="text-align:right;">Сумма</th>
+                <th style="text-align:right;">% расходов</th>
+                <th style="text-align:left;padding-left:24px;">Тренд (май)</th>
+              </tr>
+            </thead>
+            <tbody id="tag-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <footer>Все данные — MOCK · Поля соответствуют реальной схеме HastleFam</footer>
+  </div><!-- /monthly -->
+
+  <!-- ═══ QUARTERLY ═══ -->
+  <div class="tab-view" id="tab-quarterly">
+    <div class="row" style="align-items:flex-start;">
+      <div class="card" style="flex:1;min-width:300px;padding:0;overflow:hidden;">
+        <div style="padding:14px 20px;border-bottom:1px solid #27272a;">
+          <span style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;">Q2 2026 — по месяцам</span>
+        </div>
+        <table class="summary-table">
+          <thead><tr>
+            <th style="text-align:left;">Месяц</th>
+            <th style="text-align:right;">Доход</th>
+            <th style="text-align:right;">Расход</th>
+            <th style="text-align:right;">Нетто</th>
+            <th style="text-align:right;">Баланс</th>
+          </tr></thead>
+          <tbody id="quarterly-body"></tbody>
+          <tfoot><tr id="quarterly-foot"></tr></tfoot>
+        </table>
+      </div>
+      <div class="card" style="flex:2;min-width:340px;">
+        <div style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px;">Кэшфлоу Q2 2026</div>
+        <canvas id="quarterlyChart" height="75"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ YEARLY ═══ -->
+  <div class="tab-view" id="tab-yearly">
+    <div class="row" style="align-items:flex-start;">
+      <div class="card" style="flex:1;min-width:300px;padding:0;overflow:hidden;">
+        <div style="padding:14px 20px;border-bottom:1px solid #27272a;">
+          <span style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;">2026 — по месяцам</span>
+        </div>
+        <table class="summary-table">
+          <thead><tr>
+            <th style="text-align:left;">Месяц</th>
+            <th style="text-align:right;">Доход</th>
+            <th style="text-align:right;">Расход</th>
+            <th style="text-align:right;">Нетто</th>
+            <th style="text-align:right;">Баланс</th>
+          </tr></thead>
+          <tbody id="yearly-body"></tbody>
+        </table>
+      </div>
+      <div class="card" style="flex:2;min-width:340px;">
+        <div style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px;">Кэшфлоу 2026</div>
+        <canvas id="yearlyChart" height="75"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ANNUAL REPORT ═══ -->
+  <div class="tab-view" id="tab-annual">
+    <div class="row" id="annual-cards"></div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:14px 20px;border-bottom:1px solid #27272a;">
+        <span style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;">По счетам — 2026</span>
+      </div>
+      <table class="summary-table">
+        <thead><tr>
+          <th style="text-align:left;">Счёт</th>
+          <th style="text-align:right;">Нач. баланс</th>
+          <th style="text-align:right;">Доход</th>
+          <th style="text-align:right;">Расход</th>
+          <th style="text-align:right;">Кон. баланс</th>
+        </tr></thead>
+        <tbody id="annual-accounts"></tbody>
+      </table>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:14px 20px;border-bottom:1px solid #27272a;">
+        <span style="font-size:12px;font-weight:600;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;">По месяцам — 2026</span>
+      </div>
+      <table class="summary-table" id="annual-monthly-table">
+        <thead><tr>
+          <th style="text-align:left;">Месяц</th>
+          <th style="text-align:right;">Доход</th>
+          <th style="text-align:right;">Расход</th>
+          <th style="text-align:right;">Нетто</th>
+          <th style="text-align:right;">Нак. баланс</th>
+        </tr></thead>
+        <tbody id="annual-monthly-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<!-- overlay + panel -->
+<div class="overlay" id="overlay" onclick="closePanel()"></div>
+<div class="panel" id="side-panel">
+  <div style="padding:22px 24px;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;">
+      <div>
+        <p id="panel-date" style="font-size:12px;color:#71717a;margin-bottom:4px;"></p>
+        <h2 id="panel-merchant" style="font-size:17px;font-weight:600;line-height:1.3;"></h2>
+      </div>
+      <button onclick="closePanel()" style="background:none;border:none;color:#52525b;font-size:22px;cursor:pointer;padding:0 2px;line-height:1;margin-top:2px;">×</button>
+    </div>
+    <div id="panel-amount" class="mono" style="font-size:32px;font-weight:700;margin-bottom:24px;"></div>
+    <div id="panel-fields"></div>
+    <div id="panel-alert" style="margin-top:18px;"></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// DATA — injected by Jinja2 when served via FastAPI; mock fallback otherwise
+// Data islands (#report-data, #today-data) are filled by Jinja2 server-side.
+// When opened raw (no Jinja2), JSON.parse fails on template syntax → null → mock.
+// ══════════════════════════════════════════════════════════════════════════════
+let TODAY = new Date().toISOString().slice(0,10);
+try { const t = JSON.parse(document.getElementById('today-data')?.textContent || 'null'); if(t) TODAY = t; } catch(e) {}
+
+const FX_USD = 90; // mock rate — replace with real FX from backend later
+
+let _INJECTED = null;
+try { _INJECTED = JSON.parse(document.getElementById('report-data')?.textContent || 'null'); } catch(e) {}
+
+let ACCOUNTS, _SNAPSHOTS, _TXS, _REPORT_YEAR, _REPORT_MONTH;
+
+if (_INJECTED && _INJECTED.accounts) {
+  ACCOUNTS       = _INJECTED.accounts;
+  _SNAPSHOTS     = _INJECTED.snapshots;
+  _TXS           = _INJECTED.transactions;
+  _REPORT_YEAR   = _INJECTED.year;
+  _REPORT_MONTH  = _INJECTED.month;
+} else {
+  // ── MOCK FALLBACK (no household_id provided) ────────────────────────────
+  _REPORT_YEAR = 2026; _REPORT_MONTH = 5;
+  ACCOUNTS = [
+    { id:'acc-1', name:'Тинькофф',     currency:'rub' },
+    { id:'acc-2', name:'USD Наличные', currency:'usd' },
+  ];
+  _SNAPSHOTS = {
+    'acc-1': { actual_balance: 84200 },
+    'acc-2': { actual_balance: 108000 }, // $1200 × 90
+  };
+  _TXS = [
+    { id:'tx-01', occurred_at:'2026-05-01', direction:'income',  amount:145000, currency:'rub', merchant_raw:'Зарплата — Макс',          primary_tag:'зарплата',  account_id:'acc-1', is_planned:false, status:'actual',   planned_amount:145000 },
+    { id:'tx-02', occurred_at:'2026-05-01', direction:'income',  amount:92000,  currency:'rub', merchant_raw:'Зарплата — Аня',           primary_tag:'зарплата',  account_id:'acc-1', is_planned:false, status:'actual',   planned_amount:92000  },
+    { id:'tx-03', occurred_at:'2026-05-03', direction:'expense', amount:4200,   currency:'rub', merchant_raw:'ВкусВилл',                 primary_tag:'продукты',  account_id:'acc-1', is_planned:false, status:'actual'   },
+    { id:'tx-04', occurred_at:'2026-05-05', direction:'expense', amount:75000,  currency:'rub', merchant_raw:'Аренда кв. Красина 17',    primary_tag:'жильё',     account_id:'acc-1', is_planned:false, status:'matched',  planned_amount:75000  },
+    { id:'tx-05', occurred_at:'2026-05-07', direction:'expense', amount:1390,   currency:'rub', merchant_raw:'Яндекс Плюс',              primary_tag:'подписки',  account_id:'acc-1', is_planned:false, status:'matched',  planned_amount:1390   },
+    { id:'tx-06', occurred_at:'2026-05-09', direction:'expense', amount:3800,   currency:'rub', merchant_raw:'Кофе и рестораны',         primary_tag:'еда',       account_id:'acc-1', is_planned:false, status:'actual'   },
+    { id:'tx-07', occurred_at:'2026-05-10', direction:'expense', amount:680,    currency:'rub', merchant_raw:'Netflix',                  primary_tag:'подписки',  account_id:'acc-1', is_planned:false, status:'mismatch', planned_amount:799    },
+    { id:'tx-08', occurred_at:'2026-05-11', direction:'expense', amount:28000,  currency:'rub', merchant_raw:'Ремонт машины [сюрприз]',  primary_tag:'авто',      account_id:'acc-1', is_planned:false, status:'unplanned' },
+    { id:'tx-09', occurred_at:'2026-05-14', direction:'expense', amount:5600,   currency:'rub', merchant_raw:'Перекрёсток',              primary_tag:'продукты',  account_id:'acc-1', is_planned:false, status:'actual'   },
+    { id:'tx-10', occurred_at:'2026-05-15', direction:'expense', amount:2200,   currency:'rub', merchant_raw:'Такси',                    primary_tag:'транспорт', account_id:'acc-1', is_planned:false, status:'actual'   },
+    { id:'tx-11', occurred_at:'2026-05-15', direction:'expense', amount:200,    currency:'usd', merchant_raw:'Airbnb deposit',           primary_tag:'поездки',   account_id:'acc-2', is_planned:false, status:'actual'   },
+    { id:'tx-12', occurred_at:'2026-05-10', direction:'expense', amount:8500,   currency:'rub', merchant_raw:'Интернет + мобильный',     primary_tag:'связь',     account_id:'acc-1', is_planned:true,  status:'overdue'  },
+    { id:'tx-13', occurred_at:'2026-05-20', direction:'expense', amount:15000,  currency:'rub', merchant_raw:'Фитнес-клуб',              primary_tag:'спорт',     account_id:'acc-1', is_planned:true,  status:'planned'  },
+    { id:'tx-14', occurred_at:'2026-05-25', direction:'expense', amount:42000,  currency:'rub', merchant_raw:'Автостраховка ОСАГО',      primary_tag:'авто',      account_id:'acc-1', is_planned:true,  status:'planned'  },
+    { id:'tx-15', occurred_at:'2026-05-28', direction:'income',  amount:145000, currency:'rub', merchant_raw:'Зарплата — Макс',          primary_tag:'зарплата',  account_id:'acc-1', is_planned:true,  status:'planned'  },
+    { id:'tx-16', occurred_at:'2026-05-31', direction:'expense', amount:6000,   currency:'rub', merchant_raw:'Коммунальные услуги',      primary_tag:'жильё',     account_id:'acc-1', is_planned:true,  status:'planned'  },
+  ];
+}
+
+// ── compute running balance from snapshots + sorted transactions
+const ACC_START = {};
+ACCOUNTS.forEach(a => {
+  const snap = _SNAPSHOTS[a.id];
+  const native = snap ? snap.actual_balance : 0;
+  ACC_START[a.id] = a.currency === 'usd' ? native * FX_USD : native;
+});
+let totalStart = Object.values(ACC_START).reduce((s, v) => s + v, 0);
+const sorted = [..._TXS].sort((a,b) => a.occurred_at.localeCompare(b.occurred_at));
+let running = totalStart;
+const LEDGER = sorted.map(tx => {
+  const rubAmount = tx.currency === 'usd' ? tx.amount * FX_USD : tx.amount;
+  const delta = tx.direction === 'income' ? rubAmount : -rubAmount;
+  running += delta;
+  return { ...tx, rubAmount, delta, running_balance: running };
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+let viewCurrency = 'rub';
+
+function convert(rub) {
+  return viewCurrency === 'usd' ? rub / FX_USD : rub;
+}
+function fmtC(rub, decimals=0) {
+  const v = convert(rub);
+  return viewCurrency === 'usd'
+    ? '$' + v.toLocaleString('en-US', {minimumFractionDigits:decimals, maximumFractionDigits:decimals})
+    : v.toLocaleString('ru-RU') + ' ₽';
+}
+function fmtNative(amount, currency) {
+  return currency === 'usd'
+    ? '$' + amount.toLocaleString('en-US')
+    : amount.toLocaleString('ru-RU') + ' ₽';
+}
+function fmtSigned(amount, dir, currency='rub') {
+  const s = dir === 'income' ? '+' : dir === 'expense' ? '−' : '';
+  return s + fmtNative(amount, currency);
+}
+function dateLabel(d) {
+  const [,m,day] = d.split('-');
+  const months = ['','янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+  return `${parseInt(day)} ${months[parseInt(m)]}`;
+}
+
+const STATUS_LABEL = { actual:'Факт', planned:'План', matched:'Совпало', overdue:'Просрочен', mismatch:'Расхождение', unplanned:'Сюрприз' };
+const DIR_LABEL    = { income:'Доход', expense:'Расход', transfer:'Перевод', exchange:'Обмен' };
+const DIR_COLOR    = { income:'#4ade80', expense:'#f87171', transfer:'#38bdf8', exchange:'#fbbf24' };
+
+const CHART_OPTS = (y2color='#818cf8') => ({
+  responsive:true, interaction:{ mode:'index', intersect:false },
+  plugins:{
+    legend:{display:false},
+    tooltip:{ backgroundColor:'#18181b', borderColor:'#3f3f46', borderWidth:1, titleColor:'#a1a1aa', bodyColor:'#e4e4e7',
+      callbacks:{ label: c => c.raw==null ? null : ` ${c.dataset.label}: ${fmtC(c.raw * (viewCurrency==='usd'?FX_USD:1))}` }
+    }
+  },
+  scales:{
+    x:{ grid:{color:'#1f1f23'}, ticks:{color:'#52525b',font:{size:10}}, border:{color:'#1f1f23'} },
+    y:{ grid:{color:'#1f1f23'}, ticks:{color:'#52525b',font:{size:10},callback:v=>{ const rub=v*(viewCurrency==='usd'?FX_USD:1); return rub>=1000?Math.round(rub/1000)+'k':Math.round(rub); }}, border:{color:'#1f1f23'} },
+    y2:{ position:'right', grid:{display:false}, ticks:{color:y2color,font:{size:10},callback:v=>{ const rub=v*(viewCurrency==='usd'?FX_USD:1); return rub>=1000?Math.round(rub/1000)+'k':Math.round(rub); }}, border:{color:'#1f1f23'} },
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SUMMARY CARDS (monthly, currency-aware)
+// ══════════════════════════════════════════════════════════════════════════════
+const actualTxs    = LEDGER.filter(t => !t.is_planned);
+const futurePlan   = LEDGER.filter(t =>  t.is_planned && t.occurred_at > TODAY);
+const actualBal    = actualTxs.length ? actualTxs[actualTxs.length-1].running_balance : totalStart;
+const endForecast  = LEDGER[LEDGER.length-1].running_balance;
+const plannedOut   = futurePlan.filter(t=>t.direction==='expense').reduce((s,t)=>s+t.rubAmount,0);
+const actualSpent  = actualTxs.filter(t=>t.direction==='expense').reduce((s,t)=>s+t.rubAmount,0);
+const overdueCount = LEDGER.filter(t=>t.status==='overdue').length;
+const mismatchCount= LEDGER.filter(t=>t.status==='mismatch').length;
+const surpriseCount= LEDGER.filter(t=>t.status==='unplanned').length;
+
+function renderSummary() {
+  // Per-account native balances (always shown in native currency)
+  const accBals = ACCOUNTS.map(a => {
+    const txs = LEDGER.filter(t=>t.account_id===a.id&&!t.is_planned);
+    const delta = txs.reduce((s,t)=>s+t.delta,0);
+    const rubBal = ACC_START[a.id] + delta;
+    const native = a.currency==='usd' ? rubBal/FX_USD : rubBal;
+    return { name:a.name, currency:a.currency, native };
+  });
+
+  const cards = [
+    ...accBals.map(a => ({
+      label: a.name,
+      value: (a.currency==='usd'?'$':'') + Math.round(a.native).toLocaleString(a.currency==='usd'?'en-US':'ru-RU') + (a.currency==='rub'?' ₽':''),
+      sub: a.currency.toUpperCase() + ' · нативный',
+      highlight: true,
+    })),
+    { label:'Прогноз конец мес.', value:fmtC(endForecast), sub:'все счета · '+viewCurrency.toUpperCase(), danger:endForecast<0 },
+    { label:'Осталось по плану',  value:fmtC(plannedOut),  sub:'будущие расходы' },
+    { label:'Потрачено (факт)',    value:fmtC(actualSpent), sub:'текущий месяц' },
+    { label:'Требуют внимания',   value:(overdueCount+mismatchCount+surpriseCount)+' тр.', sub:`${overdueCount} просроч · ${mismatchCount} расхожд · ${surpriseCount} сюрпр`, danger:(overdueCount+mismatchCount+surpriseCount)>0 },
+  ];
+
+  document.getElementById('summary-cards').innerHTML = cards.map(c=>`
+    <div class="card ${c.danger?'danger':c.highlight?'highlight':''}" style="flex:1;min-width:160px;">
+      <div class="card-label">${c.label}</div>
+      <div class="card-value mono" style="color:${c.danger?'#f87171':c.highlight?'#fff':'#e4e4e7'};">${c.value}</div>
+      ${c.sub?`<div class="card-sub">${c.sub}</div>`:''}
+    </div>`).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAlerts() {
+  const overdue   = LEDGER.filter(t=>t.status==='overdue');
+  const mismatches= LEDGER.filter(t=>t.status==='mismatch');
+  const surprises = LEDGER.filter(t=>t.status==='unplanned');
+  let html = '';
+  overdue.forEach(t   => { html+=`<div class="alert alert-amber"><span>⚠️</span><span>Просрочен: <b>${t.merchant_raw}</b> — ${fmtNative(t.amount,t.currency)} (план на ${dateLabel(t.occurred_at)})</span></div>`; });
+  mismatches.forEach(t=> { html+=`<div class="alert alert-rose"><span>≠</span><span>Расхождение: <b>${t.merchant_raw}</b> — факт ${fmtNative(t.amount,t.currency)} vs план ${fmtNative(t.planned_amount,t.currency)}</span></div>`; });
+  surprises.forEach(t => { html+=`<div class="alert alert-zinc"><span>!</span><span>Сюрприз: <b>${t.merchant_raw}</b> — ${fmtNative(t.amount,t.currency)}</span></div>`; });
+  document.getElementById('alerts-block').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CASHFLOW CHART (monthly)
+// ══════════════════════════════════════════════════════════════════════════════
+let cashflowChart = null;
+function renderCashflowChart() {
+  const days = {};
+  for(let d=1;d<=31;d++){
+    const k=`2026-05-${String(d).padStart(2,'0')}`;
+    days[k]={ label:String(d), income:0, expense:0, actualBal:null, forecastBal:null };
+  }
+  let aBal=totalStart, fBal=totalStart;
+  Object.keys(days).sort().forEach(day=>{
+    LEDGER.filter(t=>!t.is_planned&&t.occurred_at===day).forEach(t=>{
+      if(t.direction==='income'){aBal+=t.rubAmount;days[day].income+=t.rubAmount;}
+      else{aBal-=t.rubAmount;days[day].expense+=t.rubAmount;}
+    });
+    if(day<=TODAY) days[day].actualBal=aBal;
+    LEDGER.filter(t=>t.is_planned&&t.occurred_at===day).forEach(t=>{
+      fBal+=t.direction==='income'?t.rubAmount:-t.rubAmount;
+    });
+    days[day].forecastBal=day<=TODAY?aBal:fBal+(aBal-totalStart);
+  });
+  const data=Object.values(days);
+  const ctx=document.getElementById('cashflowChart').getContext('2d');
+  if(cashflowChart) cashflowChart.destroy();
+  cashflowChart=new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels:data.map(d=>d.label),
+      datasets:[
+        { type:'line', label:'Факт-баланс',    data:data.map(d=>d.actualBal),   borderColor:'#10b981', backgroundColor:'rgba(16,185,129,.07)', borderWidth:2, pointRadius:0, tension:.3, fill:true, spanGaps:false, yAxisID:'y' },
+        { type:'line', label:'Прогноз-баланс', data:data.map(d=>d.forecastBal), borderColor:'#60a5fa', backgroundColor:'transparent', borderWidth:1.5, borderDash:[5,4], pointRadius:0, tension:.3, fill:false, yAxisID:'y' },
+        { label:'Доход',  data:data.map(d=>d.income||null),  backgroundColor:'rgba(74,222,128,.2)', borderColor:'rgba(74,222,128,.45)', borderWidth:1, borderRadius:3, yAxisID:'y2', barPercentage:.6 },
+        { label:'Расход', data:data.map(d=>d.expense||null), backgroundColor:'rgba(248,113,113,.18)',borderColor:'rgba(248,113,113,.4)', borderWidth:1, borderRadius:3, yAxisID:'y2', barPercentage:.6 },
+      ]
+    },
+    options:CHART_OPTS('#60a5fa'),
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LEDGER TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+let currentFilter = { view:'all', account:'all', status:'all' };
+
+function renderLedger() {
+  const filtered = LEDGER.filter(tx => {
+    if(currentFilter.view==='actual'&&tx.is_planned) return false;
+    if(currentFilter.view==='planned'&&!tx.is_planned) return false;
+    if(currentFilter.account!=='all'&&tx.account_id!==currentFilter.account) return false;
+    if(currentFilter.status!=='all'&&tx.status!==currentFilter.status) return false;
+    return true;
+  });
+  document.getElementById('ledger-count').textContent=`${filtered.length} записей`;
+  const body=document.getElementById('ledger-body');
+  const empty=document.getElementById('ledger-empty');
+  if(!filtered.length){body.innerHTML='';empty.style.display='block';return;}
+  empty.style.display='none';
+  const color=t=>DIR_COLOR[t.direction]||'#e4e4e7';
+  body.innerHTML=filtered.map(tx=>{
+    const fut=tx.occurred_at>TODAY, neg=tx.running_balance<0;
+    return `<tr class="ledger-row${fut?' future':''}${neg?' danger':''}" onclick="openPanel('${tx.id}')">
+      <td style="color:#71717a;white-space:nowrap;">
+        ${dateLabel(tx.occurred_at)}
+        ${fut?`<span style="margin-left:4px;font-size:9px;color:#3b82f6;text-transform:uppercase;letter-spacing:.05em;">прогноз</span>`:''}
+      </td>
+      <td><span class="badge badge-${tx.status}">${STATUS_LABEL[tx.status]||tx.status}</span></td>
+      <td style="color:${color(tx)};font-size:12px;">${DIR_LABEL[tx.direction]||tx.direction}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${tx.merchant_raw}</td>
+      <td>${tx.primary_tag?`<span class="tag-pill">#${tx.primary_tag}</span>`:'<span style="color:#3f3f46;">—</span>'}</td>
+      <td class="mono" style="text-align:right;color:${color(tx)};font-weight:500;">${fmtSigned(tx.amount,tx.direction,tx.currency)}</td>
+      <td class="mono bal-cell" style="text-align:right;color:${fut?'#60a5fa':'#d4d4d8'};">${fmtC(tx.running_balance)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SIDE PANEL
+// ══════════════════════════════════════════════════════════════════════════════
+function openPanel(id) {
+  const tx=LEDGER.find(t=>t.id===id); if(!tx) return;
+  const col=DIR_COLOR[tx.direction]||'#e4e4e7';
+  document.getElementById('panel-date').textContent=dateLabel(tx.occurred_at);
+  document.getElementById('panel-merchant').textContent=tx.merchant_raw;
+  const amtEl=document.getElementById('panel-amount');
+  amtEl.style.color=col;
+  amtEl.textContent=fmtSigned(tx.amount,tx.direction,tx.currency);
+
+  const fields=[
+    ['Статус',       `<span class="badge badge-${tx.status}">${STATUS_LABEL[tx.status]}</span>`],
+    ['Направление',  `<span style="color:${col}">${DIR_LABEL[tx.direction]}</span>`],
+    ['Счёт',         ACCOUNTS.find(a=>a.id===tx.account_id)?.name||'—'],
+    ['Тег',          tx.primary_tag?`<span class="tag-pill">#${tx.primary_tag}</span>`:'—'],
+    ['Дата',         dateLabel(tx.occurred_at)],
+    tx.planned_amount?['Сумма по плану',`<span class="mono">${fmtNative(tx.planned_amount,tx.currency)}</span>`]:null,
+    ['Баланс после', `<span class="mono">${fmtC(tx.running_balance)}</span>`],
+  ].filter(Boolean);
+
+  document.getElementById('panel-fields').innerHTML=fields.map(([k,v])=>`
+    <div class="panel-field"><span style="color:#71717a;">${k}</span><span style="color:#e4e4e7;">${v}</span></div>`).join('');
+
+  let alertHtml='';
+  if(tx.status==='mismatch') alertHtml=`<div class="alert alert-rose"><span>≠</span><div><b style="display:block;margin-bottom:3px;">Расхождение с планом</b>Факт: ${fmtNative(tx.amount,tx.currency)} · План: ${fmtNative(tx.planned_amount,tx.currency)}<br><span style="font-size:11px;opacity:.7;">Δ ${fmtNative(Math.abs(tx.amount-(tx.planned_amount||0)),tx.currency)}</span></div></div>`;
+  if(tx.status==='overdue') alertHtml=`<div class="alert alert-amber"><span>⚠️</span><div><b style="display:block;margin-bottom:3px;">Просрочено</b><span style="font-size:11px;">Плановая дата: ${dateLabel(tx.occurred_at)} — оплата не зафиксирована</span></div></div>`;
+  if(tx.status==='unplanned') alertHtml=`<div class="alert alert-zinc"><span>!</span><div><b style="display:block;margin-bottom:3px;">Помечено как сюрприз</b><span style="font-size:11px;">Пользователь добавил маркер [сюрприз] при вводе</span></div></div>`;
+  document.getElementById('panel-alert').innerHTML=alertHtml;
+
+  document.getElementById('side-panel').classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+}
+function closePanel(){
+  document.getElementById('side-panel').classList.remove('open');
+  document.getElementById('overlay').classList.remove('open');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// QUARTERLY
+// ══════════════════════════════════════════════════════════════════════════════
+const Q_MONTHS=[
+  { label:'Апрель', income:237000, expense:108400, endBal:85400 },
+  { label:'Май',    income:237000, expense:116590, endBal:null,  current:true },
+  { label:'Июнь',   income:0,      expense:0,      endBal:null,  planned:true },
+];
+let qChart=null;
+function renderQuarterly(){
+  let bal=0,totalInc=0,totalExp=0;
+  const body=document.getElementById('quarterly-body');
+  body.innerHTML=Q_MONTHS.map(m=>{
+    const net=m.income-m.expense; bal+=net; totalInc+=m.income; totalExp+=m.expense;
+    const endB=m.endBal??bal+85400;
+    return `<tr style="${m.current?'background:#1c1c22;':''}${m.planned?'opacity:.5;':''}border-bottom:1px solid #1f1f23;">
+      <td>${m.label}${m.current?'<span style="margin-left:6px;font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;">текущий</span>':''}</td>
+      <td class="mono" style="text-align:right;color:#4ade80;">${m.income?'+'+fmtC(m.income):'—'}</td>
+      <td class="mono" style="text-align:right;color:#f87171;">${m.expense?'−'+fmtC(m.expense):'—'}</td>
+      <td class="mono" style="text-align:right;color:${net>=0?'#4ade80':'#f87171'};">${m.planned?'—':(net>=0?'+':'')+fmtC(net)}</td>
+      <td class="mono" style="text-align:right;color:${m.planned?'#60a5fa':'#e4e4e7'};font-weight:500;">${m.planned?'—':fmtC(endB)}</td>
+    </tr>`;
+  }).join('');
+  const totalNet=totalInc-totalExp;
+  document.getElementById('quarterly-foot').innerHTML=`
+    <td style="color:#a1a1aa;font-size:13px;">Итого Q2</td>
+    <td class="mono" style="text-align:right;color:#4ade80;">+${fmtC(totalInc)}</td>
+    <td class="mono" style="text-align:right;color:#f87171;">−${fmtC(totalExp)}</td>
+    <td class="mono" style="text-align:right;color:${totalNet>=0?'#4ade80':'#f87171'};">${totalNet>=0?'+':''}${fmtC(totalNet)}</td>
+    <td class="mono" style="text-align:right;color:#e4e4e7;">—</td>`;
+  const ctx=document.getElementById('quarterlyChart');
+  if(!ctx) return;
+  if(qChart) qChart.destroy();
+  qChart=new Chart(ctx.getContext('2d'),{
+    type:'bar',
+    data:{
+      labels:Q_MONTHS.map(m=>m.label),
+      datasets:[
+        { label:'Доход',  data:Q_MONTHS.map(m=>convert(m.income)||null),  backgroundColor:'rgba(74,222,128,.28)', borderColor:'rgba(74,222,128,.6)', borderWidth:1, borderRadius:4 },
+        { label:'Расход', data:Q_MONTHS.map(m=>convert(m.expense)||null), backgroundColor:'rgba(248,113,113,.22)',borderColor:'rgba(248,113,113,.5)', borderWidth:1, borderRadius:4 },
+        { type:'line', label:'Баланс', data:[convert(85400),convert(120810),null], borderColor:'#818cf8', borderWidth:2, pointRadius:4, pointBackgroundColor:'#818cf8', tension:.3, yAxisID:'y2' },
+      ]
+    },
+    options:CHART_OPTS('#818cf8'),
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// YEARLY
+// ══════════════════════════════════════════════════════════════════════════════
+const Y_MONTHS=[
+  { label:'Янв', income:237000, expense:112000 },
+  { label:'Фев', income:237000, expense:98000  },
+  { label:'Мар', income:237000, expense:121000 },
+  { label:'Апр', income:237000, expense:108400 },
+  { label:'Май', income:237000, expense:116590, current:true },
+  { label:'Июн', income:237000, expense:110000, planned:true },
+  { label:'Июл', income:237000, expense:110000, planned:true },
+  { label:'Авг', income:237000, expense:110000, planned:true },
+  { label:'Сен', income:237000, expense:110000, planned:true },
+  { label:'Окт', income:237000, expense:110000, planned:true },
+  { label:'Ноя', income:237000, expense:110000, planned:true },
+  { label:'Дек', income:237000, expense:110000, planned:true },
+];
+let yChart=null;
+function renderYearly(){
+  let bal=0;
+  const bals=[];
+  document.getElementById('yearly-body').innerHTML=Y_MONTHS.map(m=>{
+    const net=m.income-m.expense; bal+=net; bals.push(convert(bal));
+    return `<tr style="${m.current?'background:#1c1c22;':''}${m.planned?'opacity:.4;':''}border-bottom:1px solid #1f1f23;">
+      <td>${m.label}${m.current?'<span style="margin-left:6px;font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;">текущий</span>':''}</td>
+      <td class="mono" style="text-align:right;color:#4ade80;">+${fmtC(m.income)}</td>
+      <td class="mono" style="text-align:right;color:#f87171;">−${fmtC(m.expense)}</td>
+      <td class="mono" style="text-align:right;color:${net>=0?'#4ade80':'#f87171'};">${net>=0?'+':''}${fmtC(net)}</td>
+      <td class="mono" style="text-align:right;color:${m.planned?'#60a5fa':'#e4e4e7'};font-weight:500;">${fmtC(bal)}</td>
+    </tr>`;
+  }).join('');
+  const ctx=document.getElementById('yearlyChart');
+  if(!ctx) return;
+  if(yChart) yChart.destroy();
+  yChart=new Chart(ctx.getContext('2d'),{
+    type:'bar',
+    data:{
+      labels:Y_MONTHS.map(m=>m.label),
+      datasets:[
+        { label:'Доход',  data:Y_MONTHS.map(m=>convert(m.income)), backgroundColor:'rgba(74,222,128,.2)', borderColor:'rgba(74,222,128,.45)', borderWidth:1, borderRadius:3 },
+        { label:'Расход', data:Y_MONTHS.map(m=>convert(m.expense)),backgroundColor:'rgba(248,113,113,.17)',borderColor:'rgba(248,113,113,.4)', borderWidth:1, borderRadius:3 },
+        { type:'line', label:'Баланс', data:bals, borderColor:'#818cf8', borderWidth:2, pointRadius:2, tension:.4, yAxisID:'y2',
+          segment:{ borderDash:ctx=>ctx.p0DataIndex>=4?[4,3]:[] } },
+      ]
+    },
+    options:CHART_OPTS('#818cf8'),
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ANNUAL REPORT
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAnnual(){
+  const totalInc=Y_MONTHS.reduce((s,m)=>s+m.income,0);
+  const totalExp=Y_MONTHS.reduce((s,m)=>s+m.expense,0);
+  const net=totalInc-totalExp;
+  // USD cash account: native amounts always shown in USD regardless of switcher
+  const usdStart=1200, usdEnd=1000;
+  document.getElementById('annual-cards').innerHTML=`
+    <div class="card highlight" style="flex:1;min-width:160px;"><div class="card-label">Баланс на 1 янв</div><div class="card-value mono" style="color:#fff;">${fmtC(0)}</div><div class="card-sub">начало года</div></div>
+    <div class="card" style="flex:1;min-width:160px;"><div class="card-label">Всего доходов</div><div class="card-value mono" style="color:#4ade80;">+${fmtC(totalInc)}</div></div>
+    <div class="card" style="flex:1;min-width:160px;"><div class="card-label">Всего расходов</div><div class="card-value mono" style="color:#f87171;">−${fmtC(totalExp)}</div></div>
+    <div class="card" style="flex:1;min-width:160px;"><div class="card-label">Нетто за год</div><div class="card-value mono" style="color:${net>=0?'#4ade80':'#f87171'};">${net>=0?'+':''}${fmtC(net)}</div></div>
+    <div class="card highlight" style="flex:1;min-width:160px;"><div class="card-label">Баланс на 31 дек</div><div class="card-value mono" style="color:#fff;">${fmtC(net)}</div><div class="card-sub" style="color:#60a5fa;">прогноз</div></div>`;
+
+  document.getElementById('annual-accounts').innerHTML=`
+    <tr style="border-bottom:1px solid #1f1f23;">
+      <td>Тинькофф <span style="font-size:10px;color:#52525b;margin-left:4px;">RUB</span></td>
+      <td class="mono" style="text-align:right;color:#a1a1aa;">${fmtC(0)}</td>
+      <td class="mono" style="text-align:right;color:#4ade80;">+${fmtC(totalInc)}</td>
+      <td class="mono" style="text-align:right;color:#f87171;">−${fmtC(totalExp)}</td>
+      <td class="mono" style="text-align:right;color:#fff;font-weight:600;">${fmtC(net)}</td>
+    </tr>
+    <tr>
+      <td>USD Наличные <span style="font-size:10px;color:#52525b;margin-left:4px;">USD · нативный</span></td>
+      <td class="mono" style="text-align:right;color:#a1a1aa;">$${usdStart.toLocaleString('en-US')}</td>
+      <td class="mono" style="text-align:right;color:#71717a;">—</td>
+      <td class="mono" style="text-align:right;color:#f87171;">−$200</td>
+      <td class="mono" style="text-align:right;color:#fff;font-weight:600;">$${usdEnd.toLocaleString('en-US')}</td>
+    </tr>`;
+
+  let bal=0;
+  document.getElementById('annual-monthly-body').innerHTML=Y_MONTHS.map(m=>{
+    const net=m.income-m.expense; bal+=net;
+    return `<tr style="${m.planned?'opacity:.4;':''}${m.current?'background:#1c1c22;':''}border-bottom:1px solid #1f1f23;">
+      <td>${m.label}</td>
+      <td class="mono" style="text-align:right;color:#4ade80;">+${fmtC(m.income)}</td>
+      <td class="mono" style="text-align:right;color:#f87171;">−${fmtC(m.expense)}</td>
+      <td class="mono" style="text-align:right;color:${net>=0?'#4ade80':'#f87171'};">${net>=0?'+':''}${fmtC(net)}</td>
+      <td class="mono" style="text-align:right;color:${m.planned?'#60a5fa':'#e4e4e7'};font-weight:500;">${fmtC(bal)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAG ANALYTICS
+// ══════════════════════════════════════════════════════════════════════════════
+function renderTagAnalytics() {
+  const expenseTxs = LEDGER.filter(t => !t.is_planned && t.direction === 'expense');
+  const totalExpRub = expenseTxs.reduce((s, t) => s + t.rubAmount, 0);
+
+  const tagMap = {};
+  expenseTxs.forEach(t => {
+    const tag = t.primary_tag || '(без тега)';
+    if (!tagMap[tag]) tagMap[tag] = { total: 0, days: {} };
+    tagMap[tag].total += t.rubAmount;
+    const day = t.occurred_at.slice(8, 10);
+    tagMap[tag].days[day] = (tagMap[tag].days[day] || 0) + t.rubAmount;
+  });
+
+  const tags = Object.entries(tagMap).sort((a, b) => b[1].total - a[1].total);
+
+  document.getElementById('tag-period-label').textContent = `${tags.length} тегов · ${fmtC(totalExpRub)} расходов`;
+
+  const body = document.getElementById('tag-table-body');
+  if (!tags.length) { body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#52525b;padding:32px;">Нет данных</td></tr>'; return; }
+
+  const maxDay = Math.max(...tags.map(([, d]) => Math.max(...Object.values(d.days), 1)));
+
+  body.innerHTML = tags.map(([tag, data]) => {
+    const pct = totalExpRub > 0 ? ((data.total / totalExpRub) * 100).toFixed(1) : '0.0';
+    const bars = Array.from({ length: 31 }, (_, i) => {
+      const day = String(i + 1).padStart(2, '0');
+      const val = data.days[day] || 0;
+      const h = val ? Math.max(3, Math.round((val / maxDay) * 20)) : 2;
+      const alpha = val ? 0.7 : 0.12;
+      return `<span style="height:${h}px;background:rgba(248,113,113,${alpha});"></span>`;
+    }).join('');
+    return `<tr class="ledger-row">
+      <td><span class="tag-pill">#${tag}</span></td>
+      <td class="mono" style="text-align:right;color:#f87171;">−${fmtC(data.total)}</td>
+      <td class="mono" style="text-align:right;color:#71717a;">${pct}%</td>
+      <td style="padding-left:24px;"><div class="sparkline">${bars}</div></td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB SWITCHING  (lazy chart init on first show)
+// ══════════════════════════════════════════════════════════════════════════════
+const PERIOD_LABELS={ monthly:'Май 2026', quarterly:'Q2 2026', yearly:'2026', annual:'2026' };
+let activeTab='monthly';
+
+function renderActiveTab(){
+  if(activeTab==='monthly'){ renderSummary(); renderLedger(); renderCashflowChart(); renderTagAnalytics(); }
+  if(activeTab==='quarterly') renderQuarterly();
+  if(activeTab==='yearly')    renderYearly();
+  if(activeTab==='annual')    renderAnnual();
+}
+
+function switchTab(tab){
+  activeTab=tab;
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  document.querySelectorAll('.tab-view').forEach(v=>v.classList.toggle('active',v.id===`tab-${tab}`));
+  document.getElementById('period-label').textContent=PERIOD_LABELS[tab];
+  renderActiveTab();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CURRENCY SWITCHER
+// ══════════════════════════════════════════════════════════════════════════════
+function setCurrency(cur){
+  viewCurrency=cur;
+  document.querySelectorAll('.cur-btn').forEach(b=>b.classList.toggle('active',b.dataset.cur===cur));
+  renderActiveTab();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FILTER WIRING
+// ══════════════════════════════════════════════════════════════════════════════
+document.getElementById('view-toggle').querySelectorAll('.filter-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('#view-toggle .filter-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter.view=btn.dataset.view;
+    renderLedger();
+  });
+});
+document.getElementById('filter-account').addEventListener('change',e=>{currentFilter.account=e.target.value;renderLedger();});
+document.getElementById('filter-status').addEventListener('change',e=>{currentFilter.status=e.target.value;renderLedger();});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════════════════════
+renderSummary();
+renderAlerts();
+renderCashflowChart();
+renderLedger();
+renderTagAnalytics();
+</script>
+</body>
+</html>
