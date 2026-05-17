@@ -121,15 +121,41 @@ def debug_error(
     household_id: str = Query(...),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Temporary debug endpoint — returns raw exception info."""
-    import datetime as _dt
+    """Temporary debug endpoint — tests DB connection variants."""
     import traceback
+    from app.infrastructure.config.settings import get_settings
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.pool import NullPool
+
+    results = {}
+    base_url = get_settings().database_url
+
+    # Test 1: session pooler (port 5432 on pooler host)
+    url_5432 = base_url.replace(":6543/", ":5432/")
     try:
-        today = _dt.date.today()
-        result = FinanceService(db).monthly_report(household_id, today.year, today.month)
-        return {"ok": True, "keys": list(result.keys()) if result else None}
+        eng = create_engine(url_5432, poolclass=NullPool, connect_args={"options": "-csearch_path=hastlefam"})
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        results["session_pooler_5432"] = "OK"
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "trace": traceback.format_exc()}
+        results["session_pooler_5432"] = str(exc)[:200]
+
+    # Test 2: direct host with postgres username (no project-ref suffix)
+    import re
+    direct = re.sub(
+        r"postgres\.\w+:([^@]+)@aws-0-[\w-]+\.pooler\.supabase\.com:\d+",
+        r"postgres:\1@db.sfzyqdpckgyznuhunygj.supabase.co:5432",
+        base_url,
+    )
+    try:
+        eng2 = create_engine(direct, poolclass=NullPool, connect_args={"options": "-csearch_path=hastlefam"})
+        with eng2.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        results["direct_ipv6_5432"] = "OK"
+    except Exception as exc:
+        results["direct_ipv6_5432"] = str(exc)[:200]
+
+    return results
 
 
 @router.post("/corrections/{transaction_id}")
