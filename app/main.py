@@ -1,6 +1,8 @@
+import base64
+import hmac
 from pathlib import Path
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from app.api.routers.health import router as health_router
 from app.api.routers.tasks import router as tasks_router
@@ -23,10 +25,31 @@ app.include_router(reviews_router)
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / 'dashboard' / 'templates'))
 
+_UNPROTECTED = {"/health", "/"}
+
 
 @app.middleware('http')
-async def log_requests(request: Request, call_next):
+async def auth_and_log(request: Request, call_next):
     logger.info('request.start', path=request.url.path, method=request.method)
+
+    password = settings.dashboard_password
+    if password and request.url.path not in _UNPROTECTED:
+        auth = request.headers.get("Authorization", "")
+        authorized = False
+        if auth.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth[6:]).decode("utf-8")
+                _, provided = decoded.split(":", 1)
+                authorized = hmac.compare_digest(provided, password)
+            except Exception:
+                pass
+        if not authorized:
+            return Response(
+                content="Unauthorized",
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="hastlefam"'},
+            )
+
     response = await call_next(request)
     logger.info('request.end', path=request.url.path, status_code=response.status_code)
     return response
