@@ -13,14 +13,18 @@ def get_engine():
     url = settings.database_url
     if url.startswith("sqlite"):
         return create_engine(url)
-    return create_engine(
-        url,
+    # NullPool for serverless environments (Vercel) — no persistent connections
+    from sqlalchemy.pool import NullPool
+    pool_cls = NullPool if settings.app_env == "vercel" else None
+    kwargs = dict(
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
-        pool_timeout=10,
         connect_args={'options': '-csearch_path=hastlefam'},
     )
+    if pool_cls:
+        kwargs["poolclass"] = pool_cls
+    else:
+        kwargs.update(pool_size=10, max_overflow=20, pool_timeout=10)
+    return create_engine(url, **kwargs)
 
 
 @lru_cache
