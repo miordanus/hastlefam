@@ -116,6 +116,22 @@ def report_data(
     return FinanceService(db).monthly_report(household_id, year, mon)
 
 
+@router.get("/debug/error")
+def debug_error(
+    household_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Temporary debug endpoint — returns raw exception info."""
+    import datetime as _dt
+    import traceback
+    try:
+        today = _dt.date.today()
+        result = FinanceService(db).monthly_report(household_id, today.year, today.month)
+        return {"ok": True, "keys": list(result.keys()) if result else None}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "trace": traceback.format_exc()}
+
+
 @router.post("/corrections/{transaction_id}")
 def update_correction(
     transaction_id: str,
