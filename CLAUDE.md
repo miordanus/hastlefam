@@ -41,11 +41,12 @@ app/
     llm/                        # OpenAI provider, contracts, validators
     logging/logger.py           # structlog JSON config
     repositories/               # base repository helpers
+    supabase/rest_client.py     # SupabaseClient (PostgREST) — Vercel REST fallback
   observability/
     error_handler.py            # FastAPI 500 handler
     event_logger.py             # writes to event_log table
     prompt_logger.py            # LLM prompt/response logging
-  dashboard/templates/          # Jinja2: index.html, finance_corrections.html
+  dashboard/templates/          # Jinja2: index.html, finance_corrections.html, monthly_report.html
   seeds/                        # run_all + seed_{areas,categories,owners,users}
 api/index.py                    # Vercel adapter (re-exports FastAPI app)
 migrations/                     # alembic env + 0001..0020 versions + manual_apply.sql
@@ -86,9 +87,15 @@ Tests use SQLite in-memory (no real DB needed). `conftest.py` sets dummy env var
 
 ### Two processes, one codebase
 
-**Web** (`app/main.py`) — FastAPI + Jinja2 dashboard at `/`, plus routers under `/finance`, `/tasks`, `/reviews`, `/health`. No bot logic, `TELEGRAM_BOT_TOKEN` not required.  
+**Web** (`app/main.py`) — FastAPI + Jinja2 dashboard at `/`, plus routers under `/finance`, `/tasks`, `/reviews`, `/health`. No bot logic, `TELEGRAM_BOT_TOKEN` not required. HTTP Basic Auth middleware protects all paths except `/health` and `/` when `DASHBOARD_PASSWORD` is set (username ignored, password compared with `hmac.compare_digest`).  
 **Worker** (`app/bot/main.py`) — aiogram 3 polling bot + APScheduler (daily status digest at 10:00 MSK, recurring payment reminders). No HTTP port. Fetches FX rates on startup.  
 Railway `Procfile` maps `web:` → uvicorn, `worker:` → bot. `railway.json` has no `startCommand` and no healthcheck entry. `vercel.json` routes everything to `api/index.py` which re-exports the FastAPI app — deploy the web service to either platform.
+
+### Vercel REST fallback (web service)
+
+Direct SQLAlchemy → Supabase Postgres is unreliable on Vercel (IPv6 / pooler quirks). When `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are set, the finance read endpoints transparently switch to PostgREST via `SupabaseClient` (`app/infrastructure/supabase/rest_client.py`) instead of opening a Postgres socket.
+
+The switch is centralised in `app/api/routers/finance.py` via `_use_rest()` plus per-endpoint dispatchers (`_run_monthly_report`, `_run_cashflow`). The corresponding service methods are named `<name>_via_rest` on `FinanceService` (currently `monthly_report_via_rest`, `cashflow_monthly_via_rest`). **When adding a new finance read endpoint that needs to work on Vercel, write a `*_via_rest` sibling and a `_run_*` dispatcher — do not call `FinanceService(db).<method>` directly from the route.** REST writes go through `sb.patch(...)` / `sb.post(...)` (see `/finance/transactions/{id}/action`).
 
 ### Request flow: Telegram message → DB
 
@@ -207,8 +214,9 @@ Full instructions + operational contract: `docs/openclaw-agent-instructions.md` 
 | `OPENAI_MODEL` | no | default `gpt-4.1-mini` |
 | `REDIS_URL` | no | default `redis://localhost:6379/0` |
 | `INSIGHTS_ENABLED` | no | default `false`; enables OpenAI insights |
-| `SUPABASE_URL` | OpenClaw only | Supabase project URL, e.g. `https://<ref>.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | OpenClaw only | Service role key for OpenClaw direct Supabase access — not used by FastAPI/bot |
+| `SUPABASE_URL` | conditional | Supabase project URL, e.g. `https://<ref>.supabase.co`. Required by OpenClaw and by the web service's Vercel REST fallback |
+| `SUPABASE_SERVICE_ROLE_KEY` | conditional | Service role key. Used by OpenClaw and, when present alongside `SUPABASE_URL`, switches finance read endpoints to PostgREST instead of SQLAlchemy |
+| `DASHBOARD_PASSWORD` | no | If set, web service requires HTTP Basic Auth on all paths except `/health` and `/` |
 | `APP_ENV` | no | default `local` |
 | `LOG_LEVEL` | no | default `INFO` |
 
