@@ -104,13 +104,33 @@ def telegram_callback(request: Request, db: Session = Depends(get_db)) -> Respon
         raise HTTPException(status_code=401, detail="auth_date expired")
 
     tg_id = str(params["id"])
-    user = db.query(User).filter(User.telegram_id == tg_id, User.is_active.is_(True)).one_or_none()
-    if user is None:
+    settings = get_settings()
+    user_id: str | None = None
+    household_id: str | None = None
+    if settings.supabase_url and settings.supabase_service_role_key:
+        from app.infrastructure.supabase import SupabaseClient
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rows = sb.get("users", {
+                "select": "id,household_id,is_active",
+                "telegram_id": f"eq.{tg_id}",
+                "is_active": "eq.true",
+                "limit": "1",
+            })
+        if rows:
+            user_id = rows[0]["id"]
+            household_id = rows[0]["household_id"]
+    else:
+        user = db.query(User).filter(User.telegram_id == tg_id, User.is_active.is_(True)).one_or_none()
+        if user is not None:
+            user_id = str(user.id)
+            household_id = str(user.household_id)
+
+    if user_id is None or household_id is None:
         raise HTTPException(status_code=403, detail="user not allowed")
 
-    token = sign_session(str(user.id), str(user.household_id))
+    token = sign_session(user_id, household_id)
     secure = request.url.scheme == "https"
-    resp = RedirectResponse(url=f"/finance/report?household_id={user.household_id}", status_code=302)
+    resp = RedirectResponse(url=f"/finance/report?household_id={household_id}", status_code=302)
     resp.set_cookie(
         SESSION_COOKIE,
         token,
