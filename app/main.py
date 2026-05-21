@@ -6,7 +6,7 @@ from app.api.routers.health import router as health_router
 from app.api.routers.tasks import router as tasks_router
 from app.api.routers.finance import router as finance_router
 from app.api.routers.reviews import router as reviews_router
-from app.api.routers.auth import router as auth_router, verify_session, SESSION_COOKIE
+from app.api.routers.auth import router as auth_router, verify_session, SESSION_COOKIE, login_page
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.logging.logger import configure_logging, get_logger
 from app.observability.error_handler import unhandled_exception_handler
@@ -51,6 +51,10 @@ async def auth_and_log(request: Request, call_next):
     return response
 
 
-@app.get('/', response_class=HTMLResponse)
-def dashboard(request: Request):
-    return templates.TemplateResponse(request, 'index.html', {})
+@app.get('/')
+def root(request: Request):
+    token = request.cookies.get(SESSION_COOKIE, '')
+    payload = verify_session(token) if token else None
+    if payload and payload.get('hid'):
+        return RedirectResponse(url=f"/finance/report?household_id={payload['hid']}", status_code=302)
+    return login_page(request)
