@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Вход — hastlefam</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { background:#0b0b0d; color:#e4e4e7; font-family:system-ui,-apple-system,sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+    .card { background:#18181b; border:1px solid #27272a; padding:32px 36px; border-radius:14px; text-align:center; }
+    h1 { font-size:18px; margin:0 0 18px 0; font-weight:500; color:#a1a1aa; }
+    .hint { color:#71717a; font-size:12px; margin-top:18px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Войти через Telegram</h1>
+    {% if bot_username %}
+      <script async src="https://telegram.org/js/telegram-widget.js?22"
+              data-telegram-login="{{ bot_username }}"
+              data-size="large"
+              data-auth-url="/auth/telegram/callback"
+              data-request-access="write"></script>
+    {% else %}
+      <p style="color:#f87171">TELEGRAM_BOT_USERNAME не задан</p>
+    {% endif %}
+    <div class="hint">Доступ только участникам домохозяйства</div>
+  </div>
+</body>
+</html>

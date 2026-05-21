@@ -18,7 +18,12 @@ class Settings(BaseSettings):
     openai_model: str = Field(alias='OPENAI_MODEL', default='gpt-4.1-mini')
     redis_url: str = Field(alias='REDIS_URL', default='redis://localhost:6379/0')
     insights_enabled: bool = Field(alias='INSIGHTS_ENABLED', default=False)
-    dashboard_password: str | None = Field(alias='DASHBOARD_PASSWORD', default=None)
+
+    telegram_bot_username: str | None = Field(alias='TELEGRAM_BOT_USERNAME', default=None)
+    session_secret: str | None = Field(alias='SESSION_SECRET', default=None)
+
+    supabase_url: str | None = Field(alias='SUPABASE_URL', default=None)
+    supabase_service_role_key: str | None = Field(alias='SUPABASE_SERVICE_ROLE_KEY', default=None)
 
 
 @lru_cache
