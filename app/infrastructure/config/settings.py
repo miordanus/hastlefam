@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     telegram_bot_username: str | None = Field(alias='TELEGRAM_BOT_USERNAME', default=None)
     session_secret: str | None = Field(alias='SESSION_SECRET', default=None)
+    dashboard_url: str = Field(alias='DASHBOARD_URL', default='https://hustlefam.skvoznoe.app')
 
     supabase_url: str | None = Field(alias='SUPABASE_URL', default=None)
     supabase_service_role_key: str | None = Field(alias='SUPABASE_SERVICE_ROLE_KEY', default=None)

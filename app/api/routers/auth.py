@@ -23,6 +23,7 @@ templates = Jinja2Templates(directory=_TEMPLATE_DIR)
 
 SESSION_COOKIE = "hf_session"
 SESSION_TTL_SECONDS = 30 * 24 * 3600
+MAGIC_TTL_SECONDS = 5 * 60
 
 
 def _b64url_encode(b: bytes) -> str:
@@ -34,14 +35,22 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def sign_session(uid: str, hid: str) -> str:
+def sign_token(uid: str, hid: str, ttl: int) -> str:
     secret = get_settings().session_secret
     if not secret:
         raise RuntimeError("SESSION_SECRET is not configured")
-    payload = json.dumps({"uid": uid, "hid": hid, "exp": int(time.time()) + SESSION_TTL_SECONDS}, separators=(",", ":")).encode()
+    payload = json.dumps({"uid": uid, "hid": hid, "exp": int(time.time()) + ttl}, separators=(",", ":")).encode()
     body = _b64url_encode(payload)
     sig = hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest()
     return f"{body}.{_b64url_encode(sig)}"
+
+
+def sign_session(uid: str, hid: str) -> str:
+    return sign_token(uid, hid, SESSION_TTL_SECONDS)
+
+
+def sign_magic(uid: str, hid: str) -> str:
+    return sign_token(uid, hid, MAGIC_TTL_SECONDS)
 
 
 def verify_session(token: str) -> dict | None:
@@ -134,6 +143,34 @@ def telegram_callback(request: Request, db: Session = Depends(get_db)) -> Respon
     resp.set_cookie(
         SESSION_COOKIE,
         token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path="/",
+    )
+    return resp
+
+
+@router.get("/auth/tg")
+def bot_magic_link(t: str, request: Request) -> Response:
+    """Consume a short-lived magic-link token minted by the Telegram bot
+    via the /dashboard command. Verifies the signature, mints a long-lived
+    session cookie, and redirects to the dashboard."""
+    payload = verify_session(t)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="invalid or expired token")
+    uid = payload.get("uid")
+    hid = payload.get("hid")
+    if not uid or not hid:
+        raise HTTPException(status_code=400, detail="malformed token")
+
+    session_token = sign_session(str(uid), str(hid))
+    secure = request.url.scheme == "https"
+    resp = RedirectResponse(url=f"/finance/report?household_id={hid}", status_code=302)
+    resp.set_cookie(
+        SESSION_COOKIE,
+        session_token,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         secure=secure,
