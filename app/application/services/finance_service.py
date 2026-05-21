@@ -737,6 +737,7 @@ class FinanceService:
         )
 
         snapshots: dict[str, dict | None] = {}
+        latest_snapshots: dict[str, dict | None] = {}
         for acc in accounts:
             snap = (
                 self.db.query(BalanceSnapshot)
@@ -749,6 +750,19 @@ class FinanceService:
             )
             snapshots[str(acc.id)] = (
                 {"actual_balance": float(snap.actual_balance)} if snap else None
+            )
+            latest = (
+                self.db.query(BalanceSnapshot)
+                .filter(BalanceSnapshot.account_id == acc.id)
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            latest_snapshots[str(acc.id)] = (
+                {
+                    "actual_balance": float(latest.actual_balance),
+                    "as_of": latest.created_at.date().isoformat(),
+                }
+                if latest else None
             )
 
         tag_map: dict[str, float] = {}
@@ -771,6 +785,7 @@ class FinanceService:
                 for a in accounts
             ],
             "snapshots": snapshots,
+            "latest_snapshots": latest_snapshots,
             "transactions": [
                 {
                     "id": str(tx.id),
@@ -788,6 +803,559 @@ class FinanceService:
                 for tx in txs
             ],
             "tag_summary": tag_summary,
+        }
+
+    def monthly_report_via_rest(self, household_id: str, year: int, month: int) -> dict[str, Any]:
+        """REST-API variant of monthly_report. Talks to PostgREST via SupabaseClient
+        instead of opening a Postgres socket. Same return shape as monthly_report().
+        """
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        last_day = calendar.monthrange(year, month)[1]
+        start_dt = datetime(year, month, 1, tzinfo=timezone.utc)
+        end_dt = datetime(year, month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+        start_iso = start_dt.isoformat()
+        end_iso = end_dt.isoformat()
+
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            accounts = sb.get("accounts", {
+                "select": "id,name,currency,is_active",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+            })
+
+            txs = sb.get("transactions", {
+                "select": "id,occurred_at,direction,amount,currency,merchant_raw,primary_tag,account_id,is_planned,is_internal_transfer,is_skipped",
+                "household_id": f"eq.{household_id}",
+                "occurred_at": [f"gte.{start_iso}", f"lte.{end_iso}"],
+                "is_internal_transfer": "eq.false",
+                "is_skipped": "eq.false",
+                "direction": "neq.exchange",
+                "order": "occurred_at.asc",
+            })
+
+            # Bulk-fetch latest snapshot per account in a single REST call.
+            # Include snapshots dated within the first day of the viewed month (snapshot
+            # at "April 1 09:24" should anchor the April view, not just May+ views).
+            from datetime import timedelta
+            snap_cutoff = (start_dt + timedelta(days=1)).isoformat()
+            snapshots: dict[str, dict | None] = {a["id"]: None for a in accounts}
+            latest_snapshots: dict[str, dict | None] = {a["id"]: None for a in accounts}
+            account_ids = [a["id"] for a in accounts]
+            if account_ids:
+                snap_rows = sb.get("balance_snapshots", {
+                    "select": "account_id,actual_balance,created_at",
+                    "account_id": f"in.({','.join(account_ids)})",
+                    "created_at": f"lt.{snap_cutoff}",
+                    "order": "account_id.asc,created_at.desc",
+                })
+                for r in snap_rows:
+                    aid = r["account_id"]
+                    if snapshots.get(aid) is None:
+                        snapshots[aid] = {
+                            "actual_balance": float(r["actual_balance"]),
+                            "as_of": (r.get("created_at") or "")[:10],
+                        }
+                # Latest snapshot regardless of date (for the "current balance" header)
+                latest_rows = sb.get("balance_snapshots", {
+                    "select": "account_id,actual_balance,created_at",
+                    "account_id": f"in.({','.join(account_ids)})",
+                    "order": "account_id.asc,created_at.desc",
+                })
+                for r in latest_rows:
+                    aid = r["account_id"]
+                    if latest_snapshots.get(aid) is None:
+                        latest_snapshots[aid] = {
+                            "actual_balance": float(r["actual_balance"]),
+                            "as_of": (r.get("created_at") or "")[:10],
+                        }
+
+            # Latest FX rates (one row per currency)
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "order": "date.desc",
+                "limit": "60",
+            })
+            fx_latest: dict[str, float] = {}
+            for r in fx_rows:
+                cur = (r.get("from_currency") or "").lower()
+                if cur and cur not in fx_latest:
+                    fx_latest[cur] = float(r["rate"])
+
+        today = date.today()
+        tag_map: dict[str, float] = {}
+        out_txs: list[dict[str, Any]] = []
+        for tx in txs:
+            occurred_str = (tx["occurred_at"] or "")[:10]
+            try:
+                occurred = date.fromisoformat(occurred_str)
+            except ValueError:
+                occurred = today
+
+            if tx["is_planned"]:
+                status = "overdue" if occurred <= today else "planned"
+            elif "[сюрприз]" in (tx.get("merchant_raw") or "").lower() or "[surprise]" in (tx.get("merchant_raw") or "").lower():
+                status = "unplanned"
+            else:
+                status = "actual"
+
+            if not tx["is_planned"] and tx["direction"] == "expense":
+                tag = tx.get("primary_tag") or "(без тега)"
+                tag_map[tag] = tag_map.get(tag, 0.0) + float(tx["amount"])
+
+            out_txs.append({
+                "id": tx["id"],
+                "occurred_at": occurred_str,
+                "direction": tx["direction"],
+                "amount": float(tx["amount"]),
+                "currency": tx.get("currency") or "rub",
+                "merchant_raw": tx.get("merchant_raw") or "",
+                "primary_tag": tx.get("primary_tag"),
+                "account_id": tx.get("account_id"),
+                "is_planned": tx["is_planned"],
+                "is_internal_transfer": tx["is_internal_transfer"],
+                "status": status,
+            })
+
+        tag_summary = [
+            {"tag": t, "total_rub": v}
+            for t, v in sorted(tag_map.items(), key=lambda x: -x[1])
+        ]
+
+        # Server-side balance computation (so frontend doesn't redo FX/snapshot math)
+        today_d = today
+        is_current = (year == today_d.year and month == today_d.month)
+        today_iso = today_d.isoformat()
+
+        def _to_rub(amount: float, cur: str | None) -> float:
+            c = (cur or "rub").lower()
+            if c == "rub":
+                return amount
+            if c == "usdt":
+                c = "usd"
+            rate = fx_latest.get(c, 1.0)
+            return amount * rate
+
+        total_start_rub = 0.0
+        for a in accounts:
+            snap = snapshots.get(a["id"])
+            if not snap:
+                continue
+            total_start_rub += _to_rub(snap["actual_balance"], a.get("currency"))
+
+        delta_rub = 0.0
+        for tx in txs:
+            if tx.get("is_planned"):
+                continue
+            if tx.get("is_internal_transfer"):
+                continue
+            if tx.get("direction") == "exchange":
+                continue
+            occ = (tx.get("occurred_at") or "")[:10]
+            if is_current and occ > today_iso:
+                continue
+            rub = _to_rub(float(tx["amount"]), tx.get("currency"))
+            if tx.get("direction") == "income":
+                delta_rub += rub
+            elif tx.get("direction") == "expense":
+                delta_rub -= rub
+
+        balance_value_rub = total_start_rub + delta_rub
+
+        return {
+            "year": year,
+            "month": month,
+            "household_id": household_id,
+            "is_current_month": is_current,
+            "balance_value_rub": balance_value_rub,
+            "accounts": [
+                {"id": a["id"], "name": a["name"], "currency": a["currency"]}
+                for a in accounts
+            ],
+            "snapshots": snapshots,
+            "latest_snapshots": latest_snapshots,
+            "transactions": out_txs,
+            "tag_summary": tag_summary,
+            "fx_rates": fx_latest,
+        }
+
+    # ─── Cashflow monthly aggregate (Cashflow tab) ────────────────────────────
+
+    def cashflow_monthly(
+        self,
+        household_id: str,
+        start_month: date,
+        end_month: date,
+    ) -> dict[str, Any]:
+        """Monthly cashflow aggregate for the dashboard Cashflow tab.
+
+        Splits planned items into liquid vs tmcc-funded buckets, tracks tmcc
+        grace payments as principal (net-wealth-neutral), and produces per-month
+        running net wealth = liquid_assets - tmcc_liability. Forecast only —
+        planned rows; actuals are not included here.
+        """
+        from app.application.services.fx_service import convert_to_rub
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        today = datetime.now(timezone.utc).date()
+
+        accounts = (
+            self.db.query(Account)
+            .filter(Account.household_id == hid, Account.is_active.is_(True))
+            .all()
+        )
+        tmcc_acc = next((a for a in accounts if a.name.lower() == "tmcc"), None)
+        tmcc_id = tmcc_acc.id if tmcc_acc else None
+
+        # Starting position: liquid = latest snapshot per active non-tmcc account,
+        # tmcc_liability = -(latest tmcc snapshot if any, else 0). All FX → RUB.
+        liquid_rub = Decimal("0")
+        tmcc_liab_rub = Decimal("0")
+        as_of: date | None = None
+        for acc in accounts:
+            snap = (
+                self.db.query(BalanceSnapshot)
+                .filter(BalanceSnapshot.account_id == acc.id)
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            if snap is None:
+                continue
+            bal = Decimal(str(snap.actual_balance))
+            rub = convert_to_rub(bal, acc.currency.value, today, self.db) or bal
+            if as_of is None or snap.created_at.date() > as_of:
+                as_of = snap.created_at.date()
+            if tmcc_id is not None and acc.id == tmcc_id:
+                # tmcc snapshot is stored as a negative balance → liability is its abs
+                tmcc_liab_rub += -rub
+            else:
+                liquid_rub += rub
+
+        # Window: include the full last month
+        last_day = calendar.monthrange(end_month.year, end_month.month)[1]
+        window_start_dt = datetime(start_month.year, start_month.month, 1, tzinfo=timezone.utc)
+        window_end_dt = datetime(end_month.year, end_month.month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+
+        # Pull all planned rows in the window in one query.
+        txs = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.is_planned.is_(True),
+                Transaction.is_skipped.is_(False),
+                Transaction.is_internal_transfer.is_(False),
+                Transaction.direction.in_([TransactionDirection.INCOME, TransactionDirection.EXPENSE]),
+                Transaction.occurred_at >= window_start_dt,
+                Transaction.occurred_at <= window_end_dt,
+            )
+            .order_by(Transaction.occurred_at.asc())
+            .all()
+        )
+
+        # Bucket each row + compute RUB equivalent
+        def _month_key(dt: datetime) -> str:
+            return f"{dt.year:04d}-{dt.month:02d}"
+
+        # Iterate forward, accumulating end-of-month liquid + tmcc liab.
+        running_liquid = liquid_rub
+        running_tmcc_liab = tmcc_liab_rub
+
+        months_out: list[dict[str, Any]] = []
+        # Iterate calendar months inclusive
+        cur_year, cur_month = start_month.year, start_month.month
+        while True:
+            cur_key = f"{cur_year:04d}-{cur_month:02d}"
+            month_first = date(cur_year, cur_month, 1)
+            month_last = date(cur_year, cur_month, calendar.monthrange(cur_year, cur_month)[1])
+
+            income_rub = Decimal("0")
+            expense_liquid_rub = Decimal("0")
+            expense_tmcc_rub = Decimal("0")
+            tmcc_grace_rub = Decimal("0")
+            line_items: list[dict[str, Any]] = []
+
+            for tx in txs:
+                tx_d = tx.occurred_at.date()
+                if tx_d < month_first or tx_d > month_last:
+                    continue
+                cur = tx.currency.value if tx.currency else "rub"
+                amt = Decimal(str(tx.amount))
+                rub = convert_to_rub(amt, cur, tx_d, self.db) or amt
+
+                is_tmcc_funded = (tmcc_id is not None and tx.account_id == tmcc_id)
+                desc = (tx.description or "")
+                tag = tx.primary_tag or ""
+                is_grace_pmt = (
+                    tx.direction == TransactionDirection.EXPENSE
+                    and not is_tmcc_funded
+                    and tag == "debt_repayment"
+                    and "tmcc" in desc.lower()
+                )
+
+                if tx.direction == TransactionDirection.INCOME:
+                    income_rub += rub
+                    bucket = "liquid"
+                elif is_tmcc_funded:
+                    expense_tmcc_rub += rub
+                    bucket = "tmcc"
+                else:
+                    expense_liquid_rub += rub
+                    if is_grace_pmt:
+                        tmcc_grace_rub += rub
+                    bucket = "liquid"
+
+                line_items.append({
+                    "date": tx_d.isoformat(),
+                    "direction": tx.direction.value,
+                    "amount": float(amt),
+                    "currency": cur,
+                    "rub_equiv": float(rub),
+                    "primary_tag": tx.primary_tag,
+                    "description": tx.description,
+                    "bucket": bucket,
+                })
+
+            delta_liquid = income_rub - expense_liquid_rub
+            running_liquid = running_liquid + delta_liquid
+            # tmcc liability: grace payments reduce it, new tmcc charges increase it
+            running_tmcc_liab = running_tmcc_liab - tmcc_grace_rub + expense_tmcc_rub
+            end_net_wealth = running_liquid - running_tmcc_liab
+
+            months_out.append({
+                "month": cur_key,
+                "income_rub": float(income_rub),
+                "expense_liquid_rub": float(expense_liquid_rub),
+                "expense_tmcc_rub": float(expense_tmcc_rub),
+                "tmcc_grace_payments_rub": float(tmcc_grace_rub),
+                "delta_liquid_rub": float(delta_liquid),
+                "end_liquid_rub": float(running_liquid),
+                "end_tmcc_liab_rub": float(running_tmcc_liab),
+                "end_net_wealth_rub": float(end_net_wealth),
+                "line_items": line_items,
+            })
+
+            if cur_year == end_month.year and cur_month == end_month.month:
+                break
+            cur_month += 1
+            if cur_month > 12:
+                cur_month = 1
+                cur_year += 1
+
+        return {
+            "window": {
+                "start": f"{start_month.year:04d}-{start_month.month:02d}",
+                "end": f"{end_month.year:04d}-{end_month.month:02d}",
+            },
+            "starting_position": {
+                "liquid_rub": float(liquid_rub),
+                "tmcc_liability_rub": float(tmcc_liab_rub),
+                "net_wealth_rub": float(liquid_rub - tmcc_liab_rub),
+                "as_of": as_of.isoformat() if as_of else None,
+            },
+            "months": months_out,
+        }
+
+    def cashflow_monthly_via_rest(
+        self,
+        household_id: str,
+        start_month: date,
+        end_month: date,
+    ) -> dict[str, Any]:
+        """REST-API variant of cashflow_monthly. Same return shape — used on Vercel
+        where the direct Postgres socket is unreliable."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+
+        last_day = calendar.monthrange(end_month.year, end_month.month)[1]
+        window_start_dt = datetime(start_month.year, start_month.month, 1, tzinfo=timezone.utc)
+        window_end_dt = datetime(end_month.year, end_month.month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+        window_start_iso = window_start_dt.isoformat()
+        window_end_iso = window_end_dt.isoformat()
+
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            accounts = sb.get("accounts", {
+                "select": "id,name,currency,is_active",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+            })
+
+            account_ids = [a["id"] for a in accounts]
+            latest_snap: dict[str, dict | None] = {aid: None for aid in account_ids}
+            if account_ids:
+                snap_rows = sb.get("balance_snapshots", {
+                    "select": "account_id,actual_balance,created_at",
+                    "account_id": f"in.({','.join(account_ids)})",
+                    "order": "account_id.asc,created_at.desc",
+                })
+                for r in snap_rows:
+                    aid = r["account_id"]
+                    if latest_snap.get(aid) is None:
+                        latest_snap[aid] = r
+
+            txs = sb.get("transactions", {
+                "select": "id,occurred_at,direction,amount,currency,description,primary_tag,account_id,is_planned,is_internal_transfer,is_skipped",
+                "household_id": f"eq.{household_id}",
+                "is_planned": "eq.true",
+                "is_skipped": "eq.false",
+                "is_internal_transfer": "eq.false",
+                "direction": "in.(income,expense)",
+                "occurred_at": [f"gte.{window_start_iso}", f"lte.{window_end_iso}"],
+                "order": "occurred_at.asc",
+            })
+
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "order": "date.desc",
+                "limit": "60",
+            })
+
+        fx_latest: dict[str, float] = {}
+        for r in fx_rows:
+            cur = (r.get("from_currency") or "").lower()
+            if cur and cur not in fx_latest:
+                fx_latest[cur] = float(r["rate"])
+
+        def to_rub(amount: Decimal, currency: str) -> Decimal:
+            cur = (currency or "rub").lower()
+            if cur == "rub":
+                return amount
+            rate = fx_latest.get(cur)
+            if rate is None and cur == "usdt":
+                rate = fx_latest.get("usd")
+            if rate is None:
+                return amount
+            return amount * Decimal(str(rate))
+
+        tmcc_acc = next((a for a in accounts if (a.get("name") or "").lower() == "tmcc"), None)
+        tmcc_id = tmcc_acc["id"] if tmcc_acc else None
+
+        liquid_rub = Decimal("0")
+        tmcc_liab_rub = Decimal("0")
+        as_of: date | None = None
+        for acc in accounts:
+            snap = latest_snap.get(acc["id"])
+            if snap is None:
+                continue
+            bal = Decimal(str(snap["actual_balance"]))
+            rub = to_rub(bal, acc.get("currency") or "rub")
+            snap_date_str = (snap.get("created_at") or "")[:10]
+            try:
+                snap_date = date.fromisoformat(snap_date_str) if snap_date_str else None
+            except ValueError:
+                snap_date = None
+            if snap_date and (as_of is None or snap_date > as_of):
+                as_of = snap_date
+            if tmcc_id is not None and acc["id"] == tmcc_id:
+                tmcc_liab_rub += -rub
+            else:
+                liquid_rub += rub
+
+        running_liquid = liquid_rub
+        running_tmcc_liab = tmcc_liab_rub
+
+        months_out: list[dict[str, Any]] = []
+        cur_year, cur_month = start_month.year, start_month.month
+        while True:
+            cur_key = f"{cur_year:04d}-{cur_month:02d}"
+            month_first = date(cur_year, cur_month, 1)
+            month_last = date(cur_year, cur_month, calendar.monthrange(cur_year, cur_month)[1])
+
+            income_rub = Decimal("0")
+            expense_liquid_rub = Decimal("0")
+            expense_tmcc_rub = Decimal("0")
+            tmcc_grace_rub = Decimal("0")
+            line_items: list[dict[str, Any]] = []
+
+            for tx in txs:
+                tx_date_str = (tx.get("occurred_at") or "")[:10]
+                try:
+                    tx_d = date.fromisoformat(tx_date_str)
+                except ValueError:
+                    continue
+                if tx_d < month_first or tx_d > month_last:
+                    continue
+
+                cur = (tx.get("currency") or "rub").lower()
+                amt = Decimal(str(tx["amount"]))
+                rub = to_rub(amt, cur)
+                direction = (tx.get("direction") or "").lower()
+
+                is_tmcc_funded = (tmcc_id is not None and tx.get("account_id") == tmcc_id)
+                desc = tx.get("description") or ""
+                tag = tx.get("primary_tag") or ""
+                is_grace_pmt = (
+                    direction == "expense"
+                    and not is_tmcc_funded
+                    and tag == "debt_repayment"
+                    and "tmcc" in desc.lower()
+                )
+
+                if direction == "income":
+                    income_rub += rub
+                    bucket = "liquid"
+                elif is_tmcc_funded:
+                    expense_tmcc_rub += rub
+                    bucket = "tmcc"
+                else:
+                    expense_liquid_rub += rub
+                    if is_grace_pmt:
+                        tmcc_grace_rub += rub
+                    bucket = "liquid"
+
+                line_items.append({
+                    "date": tx_d.isoformat(),
+                    "direction": direction,
+                    "amount": float(amt),
+                    "currency": cur,
+                    "rub_equiv": float(rub),
+                    "primary_tag": tx.get("primary_tag"),
+                    "description": tx.get("description"),
+                    "bucket": bucket,
+                })
+
+            delta_liquid = income_rub - expense_liquid_rub
+            running_liquid = running_liquid + delta_liquid
+            running_tmcc_liab = running_tmcc_liab - tmcc_grace_rub + expense_tmcc_rub
+            end_net_wealth = running_liquid - running_tmcc_liab
+
+            months_out.append({
+                "month": cur_key,
+                "income_rub": float(income_rub),
+                "expense_liquid_rub": float(expense_liquid_rub),
+                "expense_tmcc_rub": float(expense_tmcc_rub),
+                "tmcc_grace_payments_rub": float(tmcc_grace_rub),
+                "delta_liquid_rub": float(delta_liquid),
+                "end_liquid_rub": float(running_liquid),
+                "end_tmcc_liab_rub": float(running_tmcc_liab),
+                "end_net_wealth_rub": float(end_net_wealth),
+                "line_items": line_items,
+            })
+
+            if cur_year == end_month.year and cur_month == end_month.month:
+                break
+            cur_month += 1
+            if cur_month > 12:
+                cur_month = 1
+                cur_year += 1
+
+        return {
+            "window": {
+                "start": f"{start_month.year:04d}-{start_month.month:02d}",
+                "end": f"{end_month.year:04d}-{end_month.month:02d}",
+            },
+            "starting_position": {
+                "liquid_rub": float(liquid_rub),
+                "tmcc_liability_rub": float(tmcc_liab_rub),
+                "net_wealth_rub": float(liquid_rub - tmcc_liab_rub),
+                "as_of": as_of.isoformat() if as_of else None,
+            },
+            "months": months_out,
         }
 
     # ─── Legacy: keep for existing API routes ─────────────────────────────────

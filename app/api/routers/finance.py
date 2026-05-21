@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -11,10 +11,36 @@ from app.api.deps import get_db
 from app.api.schemas.finance import SQLImportRequest, TransactionCorrectionUpdate
 from app.application.services.finance_service import FinanceService
 from app.application.services.import_service import ImportService
+from app.infrastructure.config.settings import get_settings
 from app.infrastructure.db.models import FinanceCategory, RecurringPayment, Transaction
 
+
+def _use_rest() -> bool:
+    s = get_settings()
+    return bool(s.supabase_url and s.supabase_service_role_key)
+
+
+def _run_monthly_report(db: Session, household_id: str, year: int, month: int) -> dict:
+    if _use_rest():
+        return FinanceService(None).monthly_report_via_rest(household_id, year, month)
+    return FinanceService(db).monthly_report(household_id, year, month)
+
+
+def _run_cashflow(db: Session, household_id: str, sd, ed) -> dict:
+    if _use_rest():
+        return FinanceService(None).cashflow_monthly_via_rest(household_id, sd, ed)
+    return FinanceService(db).cashflow_monthly(household_id, sd, ed)
+
 router = APIRouter(prefix="/finance", tags=["finance"])
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "dashboard" / "templates"))
+
+_TEMPLATE_DIR = str(Path(__file__).resolve().parents[2] / "dashboard" / "templates")
+import jinja2 as _jinja2
+_env = _jinja2.Environment(
+    loader=_jinja2.FileSystemLoader(_TEMPLATE_DIR),
+    autoescape=_jinja2.select_autoescape(),
+    cache_size=0,
+)
+templates = Jinja2Templates(env=_env)
 
 
 @router.post("/import/sql")
@@ -52,9 +78,9 @@ def corrections_page(
     recurring = db.query(RecurringPayment).filter(RecurringPayment.household_id == household_id).all()
 
     return templates.TemplateResponse(
+        request,
         "finance_corrections.html",
         {
-            "request": request,
             "household_id": household_id,
             "uncategorized": uncategorized,
             "transactions": tx_rows,
@@ -84,11 +110,11 @@ def report_page(
         else:
             today = _dt.date.today()
             year, mon = today.year, today.month
-        report_data = FinanceService(db).monthly_report(household_id, year, mon)
+        report_data = _run_monthly_report(db, household_id, year, mon)
     return templates.TemplateResponse(
+        request,
         "monthly_report.html",
         {
-            "request": request,
             "report_data": report_data,
             "today_iso": _dt.date.today().isoformat(),
         },
@@ -113,49 +139,90 @@ def report_data(
     else:
         today = _dt.date.today()
         year, mon = today.year, today.month
-    return FinanceService(db).monthly_report(household_id, year, mon)
+    return _run_monthly_report(db, household_id, year, mon)
 
 
-@router.get("/debug/error")
-def debug_error(
+@router.get("/cashflow")
+def cashflow_monthly(
     household_id: str = Query(...),
+    start: str = Query(default=None, description="YYYY-MM, defaults to current month"),
+    end: str = Query(default=None, description="YYYY-MM, defaults to start + 2 months"),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Temporary debug endpoint — tests DB connection variants."""
-    import traceback
-    from app.infrastructure.config.settings import get_settings
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.pool import NullPool
+    """Monthly cashflow aggregate (Cashflow tab). Planned items only."""
+    import datetime as _dt
 
-    results = {}
-    base_url = get_settings().database_url
+    today = _dt.date.today()
+    if start:
+        try:
+            sd = _dt.datetime.strptime(start, "%Y-%m").date()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="start must be YYYY-MM")
+    else:
+        sd = today.replace(day=1)
 
-    # Test 1: session pooler (port 5432 on pooler host)
-    url_5432 = base_url.replace(":6543/", ":5432/")
+    if end:
+        try:
+            ed = _dt.datetime.strptime(end, "%Y-%m").date()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="end must be YYYY-MM")
+    else:
+        y, m = sd.year, sd.month + 2
+        while m > 12:
+            m -= 12
+            y += 1
+        ed = _dt.date(y, m, 1)
+
+    return _run_cashflow(db, household_id, sd, ed)
+
+
+@router.post("/transactions/{tx_id}/action")
+def transaction_action(tx_id: str, action: str = Form(...)) -> dict:
+    """Inline action for ledger rows. action='paid' converts a planned tx to actual;
+    action='skip' marks it skipped. Requires Supabase REST creds."""
+    if not _use_rest():
+        raise HTTPException(status_code=503, detail="Supabase REST not configured")
+    if action == "paid":
+        body = {"is_planned": False}
+    elif action == "skip":
+        body = {"is_skipped": True}
+    else:
+        raise HTTPException(status_code=400, detail="action must be 'paid' or 'skip'")
+    from app.infrastructure.supabase import SupabaseClient
+    s = get_settings()
+    with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+        sb.patch("transactions", {"id": f"eq.{tx_id}"}, body)
+    return {"ok": True, "tx_id": tx_id, "action": action}
+
+
+@router.get("/report/range")
+def report_range(
+    household_id: str = Query(...),
+    from_: str = Query(..., alias="from", description="YYYY-MM"),
+    to_:   str = Query(..., alias="to",   description="YYYY-MM"),
+) -> dict:
+    """Per-month income/expense totals (RUB) for [from..to] inclusive."""
+    if not _use_rest():
+        raise HTTPException(status_code=503, detail="Supabase REST not configured")
+    import datetime as _dt
+    import calendar as _cal
     try:
-        eng = create_engine(url_5432, poolclass=NullPool, connect_args={"options": "-csearch_path=hastlefam"})
-        with eng.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        results["session_pooler_5432"] = "OK"
-    except Exception as exc:
-        results["session_pooler_5432"] = str(exc)[:200]
-
-    # Test 2: direct host with postgres username (no project-ref suffix)
-    import re
-    direct = re.sub(
-        r"postgres\.\w+:([^@]+)@aws-0-[\w-]+\.pooler\.supabase\.com:\d+",
-        r"postgres:\1@db.sfzyqdpckgyznuhunygj.supabase.co:5432",
-        base_url,
-    )
-    try:
-        eng2 = create_engine(direct, poolclass=NullPool, connect_args={"options": "-csearch_path=hastlefam"})
-        with eng2.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        results["direct_ipv6_5432"] = "OK"
-    except Exception as exc:
-        results["direct_ipv6_5432"] = str(exc)[:200]
-
-    return results
+        fy, fm = [int(x) for x in from_.split("-")]
+        ty, tm = [int(x) for x in to_.split("-")]
+    except ValueError:
+        raise HTTPException(status_code=422, detail="from/to must be YYYY-MM")
+    p_from = _dt.date(fy, fm, 1).isoformat()
+    last_day = _cal.monthrange(ty, tm)[1]
+    p_to = _dt.date(ty, tm, last_day).isoformat()
+    from app.infrastructure.supabase import SupabaseClient
+    s = get_settings()
+    with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+        rows = sb.rpc("monthly_totals", {
+            "p_household_id": household_id,
+            "p_from": p_from,
+            "p_to": p_to,
+        })
+    return {"months": rows}
 
 
 @router.post("/corrections/{transaction_id}")
