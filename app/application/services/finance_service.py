@@ -1027,6 +1027,27 @@ class FinanceService:
         # EOM forecast: only meaningful for current or future months.
         forecast_eom_rub = balance_value_rub + forecast_planned_rub if (is_current or is_future) else balance_value_rub
 
+        # Per-account RUB balance computed at the LATEST snapshot's own date.
+        # Single source of truth for the dashboard account cards — frontend renders
+        # this directly instead of calling toRub() with today's FX (which produced
+        # silent drift whenever FX moved between the snapshot date and today).
+        account_payload = []
+        for a in accounts:
+            latest = latest_snapshots.get(a["id"]) or {}
+            native = latest.get("actual_balance")
+            balance_rub = (
+                _rub_on_date(float(native), a.get("currency"), latest.get("as_of"), fx_by_cur)
+                if native is not None else None
+            )
+            account_payload.append({
+                "id": a["id"],
+                "name": a["name"],
+                "currency": a["currency"],
+                "balance_native": float(native) if native is not None else None,
+                "balance_rub": balance_rub,
+                "balance_as_of": latest.get("as_of"),
+            })
+
         return {
             "year": year,
             "month": month,
@@ -1035,10 +1056,7 @@ class FinanceService:
             "balance_value_rub": balance_value_rub,
             "start_balance_rub": total_start_rub,
             "forecast_eom_rub": forecast_eom_rub,
-            "accounts": [
-                {"id": a["id"], "name": a["name"], "currency": a["currency"]}
-                for a in accounts
-            ],
+            "accounts": account_payload,
             "snapshots": snapshots,
             "latest_snapshots": latest_snapshots,
             "transactions": out_txs,

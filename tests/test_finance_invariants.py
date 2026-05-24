@@ -88,7 +88,6 @@ def test_per_date_fx_consistency_across_methods(mock_supabase):
     assert tot[0]["actual_income_rub"] == 760.0
 
 
-@pytest.mark.xfail(strict=True, reason="Bug #1 — per-account balance_rub not yet on backend; fixed in follow-up commit")
 def test_account_balance_sum_eq_hero_when_no_mid_month_activity(mock_supabase):
     """When each account's latest snapshot dates BEFORE month-start and there
     are no in-month txs, the sum of per-account balance_rub (backend-supplied)
