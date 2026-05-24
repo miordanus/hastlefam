@@ -140,7 +140,6 @@ def test_planned_future_in_current_month_only_to_forecast(mock_supabase):
     assert out["forecast_eom_rub"] == 500.0    # 1000 - 500
 
 
-@pytest.mark.xfail(strict=True, reason="Bug #2 — overdue planned currently dropped; fixed in follow-up commit")
 def test_overdue_planned_counted_in_forecast(mock_supabase):
     """Planned tx on May 10 (today=May 24, current month) — overdue.
 

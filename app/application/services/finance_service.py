@@ -1013,11 +1013,13 @@ class FinanceService:
                 continue
             rub = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
             if tx.get("is_planned"):
-                if is_current and occ > today_iso:
+                # Current or future month: planned rows belong to EOM forecast,
+                # regardless of whether occurred_at is before or after today.
+                # Overdue planned (occ <= today in current view) is still expected
+                # to happen this month; it just hasn't materialised yet.
+                # Past months: planned rows ignored — what didn't happen didn't happen.
+                if is_current or is_future:
                     forecast_planned_rub += sign * rub
-                elif is_future:
-                    forecast_planned_rub += sign * rub
-                # past months: planned rows ignored — what didn't happen didn't happen
                 continue
             if is_current and occ > today_iso:
                 continue
