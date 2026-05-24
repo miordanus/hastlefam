@@ -56,9 +56,10 @@ def _rub_on_date(
         return amount * rates[0][1] if rates else amount
     try:
         d = date.fromisoformat(d_iso)
-        cutoff = (d - timedelta(days=7)).isoformat()
     except ValueError:
-        cutoff = ""
+        # Unparseable date → can't do a meaningful per-date lookup. Silent 1:1.
+        return amount
+    cutoff = (d - timedelta(days=7)).isoformat()
     for row_date, rate in rates:
         if cutoff <= row_date <= d_iso:
             return amount * rate
