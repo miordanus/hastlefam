@@ -1380,18 +1380,28 @@ class FinanceService:
         import calendar as _cal
         import datetime as _dt
 
-        def _ym_bounds(ym_from: str, ym_to: str) -> tuple[str, str]:
+        def _ym_bounds(ym_from: str, ym_to: str) -> tuple[str, str, str, str]:
+            """Return (date_start, date_end, dt_start_iso, dt_end_iso).
+
+            Date strings are used for in-Python bucket comparison against
+            occurred_at[:10]. Datetime strings (timezone-aware, end-of-day)
+            are used for the PostgREST filter so we don't truncate the last
+            day of timestamptz-stored transactions.
+            """
             fy, fm = [int(x) for x in ym_from.split("-")]
             ty, tm = [int(x) for x in ym_to.split("-")]
-            start = _dt.date(fy, fm, 1).isoformat()
-            end = _dt.date(ty, tm, _cal.monthrange(ty, tm)[1]).isoformat()
-            return start, end
+            last_day = _cal.monthrange(ty, tm)[1]
+            d_start = _dt.date(fy, fm, 1).isoformat()
+            d_end = _dt.date(ty, tm, last_day).isoformat()
+            dt_start = _dt.datetime(fy, fm, 1, tzinfo=timezone.utc).isoformat()
+            dt_end = _dt.datetime(ty, tm, last_day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+            return d_start, d_end, dt_start, dt_end
 
-        curr_start, curr_end = _ym_bounds(period_from, period_to)
-        prev_start, prev_end = _ym_bounds(prev_from, prev_to)
+        curr_start, curr_end, curr_start_dt, curr_end_dt = _ym_bounds(period_from, period_to)
+        prev_start, prev_end, prev_start_dt, prev_end_dt = _ym_bounds(prev_from, prev_to)
         # PostgREST range covers both windows; filter into buckets in Python.
-        full_start = min(curr_start, prev_start)
-        full_end = max(curr_end, prev_end)
+        full_start_dt = min(curr_start_dt, prev_start_dt)
+        full_end_dt = max(curr_end_dt, prev_end_dt)
 
         s = get_settings()
         with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
@@ -1402,7 +1412,8 @@ class FinanceService:
                 "is_planned": "eq.false",
                 "is_internal_transfer": "eq.false",
                 "is_skipped": "eq.false",
-                "occurred_at": [f"gte.{full_start}", f"lte.{full_end}"],
+                "occurred_at": [f"gte.{full_start_dt}", f"lte.{full_end_dt}"],
+                "limit": "50000",
             })
             fx_rows = sb.get("fx_rates", {
                 "select": "from_currency,rate,date",
