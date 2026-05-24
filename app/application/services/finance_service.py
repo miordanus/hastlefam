@@ -1358,6 +1358,128 @@ class FinanceService:
             "months": months_out,
         }
 
+    # ─── Category movers (QoQ / YoY) ─────────────────────────────────────────
+
+    def category_movers_via_rest(
+        self,
+        household_id: str,
+        period_from: str,   # YYYY-MM, current period start
+        period_to: str,     # YYYY-MM, current period end
+        prev_from: str,     # YYYY-MM, prior period start
+        prev_to: str,       # YYYY-MM, prior period end
+    ) -> dict[str, Any]:
+        """Per-tag expense aggregates across two adjacent periods (RUB-converted).
+
+        Returns {"current": {...}, "prior": {...}, "movers": [...]} where movers is
+        sorted by abs(delta_rub) descending. Vercel/REST-only — same posture as
+        /finance/report/range. Filters: direction=expense, is_planned=false,
+        is_internal_transfer=false, is_skipped=false.
+        """
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+        import calendar as _cal
+        import datetime as _dt
+
+        def _ym_bounds(ym_from: str, ym_to: str) -> tuple[str, str, str, str]:
+            """Return (date_start, date_end, dt_start_iso, dt_end_iso).
+
+            Date strings are used for in-Python bucket comparison against
+            occurred_at[:10]. Datetime strings (timezone-aware, end-of-day)
+            are used for the PostgREST filter so we don't truncate the last
+            day of timestamptz-stored transactions.
+            """
+            fy, fm = [int(x) for x in ym_from.split("-")]
+            ty, tm = [int(x) for x in ym_to.split("-")]
+            last_day = _cal.monthrange(ty, tm)[1]
+            d_start = _dt.date(fy, fm, 1).isoformat()
+            d_end = _dt.date(ty, tm, last_day).isoformat()
+            dt_start = _dt.datetime(fy, fm, 1, tzinfo=timezone.utc).isoformat()
+            dt_end = _dt.datetime(ty, tm, last_day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+            return d_start, d_end, dt_start, dt_end
+
+        curr_start, curr_end, curr_start_dt, curr_end_dt = _ym_bounds(period_from, period_to)
+        prev_start, prev_end, prev_start_dt, prev_end_dt = _ym_bounds(prev_from, prev_to)
+        # PostgREST range covers both windows; filter into buckets in Python.
+        full_start_dt = min(curr_start_dt, prev_start_dt)
+        full_end_dt = max(curr_end_dt, prev_end_dt)
+
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            txs = sb.get("transactions", {
+                "select": "occurred_at,amount,currency,primary_tag",
+                "household_id": f"eq.{household_id}",
+                "direction": "eq.expense",
+                "is_planned": "eq.false",
+                "is_internal_transfer": "eq.false",
+                "is_skipped": "eq.false",
+                "occurred_at": [f"gte.{full_start_dt}", f"lte.{full_end_dt}"],
+                "limit": "50000",
+            })
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "order": "date.desc",
+                "limit": "60",
+            })
+
+        fx_latest: dict[str, float] = {}
+        for r in fx_rows:
+            cur = (r.get("from_currency") or "").lower()
+            if cur and cur not in fx_latest:
+                fx_latest[cur] = float(r["rate"])
+
+        def _to_rub(amount: float, cur: str | None) -> float:
+            c = (cur or "rub").lower()
+            if c == "rub":
+                return amount
+            if c == "usdt":
+                c = "usd"
+            return amount * fx_latest.get(c, 1.0)
+
+        curr_by_tag: dict[str, float] = {}
+        prior_by_tag: dict[str, float] = {}
+        curr_total = 0.0
+        prior_total = 0.0
+
+        for tx in txs:
+            occ = (tx.get("occurred_at") or "")[:10]
+            amount_rub = _to_rub(float(tx["amount"]), tx.get("currency"))
+            tag = tx.get("primary_tag") or "(без тега)"
+            if curr_start <= occ <= curr_end:
+                curr_by_tag[tag] = curr_by_tag.get(tag, 0.0) + amount_rub
+                curr_total += amount_rub
+            elif prev_start <= occ <= prev_end:
+                prior_by_tag[tag] = prior_by_tag.get(tag, 0.0) + amount_rub
+                prior_total += amount_rub
+
+        all_tags = set(curr_by_tag.keys()) | set(prior_by_tag.keys())
+        movers: list[dict[str, Any]] = []
+        for tag in all_tags:
+            c = curr_by_tag.get(tag, 0.0)
+            p = prior_by_tag.get(tag, 0.0)
+            delta = c - p
+            if p > 0:
+                delta_pct: int | None = round(delta / p * 100)
+            elif c > 0:
+                delta_pct = None   # newly used category
+            else:
+                continue            # both zero — skip
+            movers.append({
+                "tag": tag,
+                "current_rub": c,
+                "prior_rub": p,
+                "delta_rub": delta,
+                "delta_pct": delta_pct,
+            })
+
+        movers.sort(key=lambda m: abs(m["delta_rub"]), reverse=True)
+
+        return {
+            "current": {"from": period_from, "to": period_to, "total_rub": curr_total},
+            "prior":   {"from": prev_from,   "to": prev_to,   "total_rub": prior_total},
+            "movers":  movers,
+        }
+
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 
     def upcoming_payments(self, household_id: str, days: int = 7, until_date: date | None = None) -> list[dict[str, Any]]:
