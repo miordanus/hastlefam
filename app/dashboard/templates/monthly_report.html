@@ -545,6 +545,11 @@ if (_INJECTED && _INJECTED.accounts) {
   HOUSEHOLD_ID = new URLSearchParams(location.search).get('household_id');
 }
 
+// Real-today anchors (independent of report period) — used for the "текущий" badge.
+const _t = new Date(TODAY);
+const _TODAY_Y = _t.getFullYear();
+const _TODAY_M = _t.getMonth() + 1;
+
 // FX rates: real from backend, fallback to plausible defaults
 const FX_RATES = (_INJECTED && _INJECTED.fx_rates) || { usd:73, eur:85, amd:0.2, pln:20, usdt:73 };
 
@@ -1408,7 +1413,7 @@ async function renderQuarterly() {
     const exp = r ? Number(r.actual_expense_rub || 0) : 0;
     const net = inc - exp;
     const sav = inc > 0 ? Math.round(net / inc * 100) : null;
-    const isCurr = (mm === _REPORT_MONTH && cfy === _REPORT_YEAR);
+    const isCurr = (mm === _TODAY_M && cfy === _TODAY_Y);
     rows.push(`<tr style="${isCurr ? 'background:#1c1c22' : ''}">
       <td>${MONTHS_FULL[mm]}${isCurr ? ' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>' : ''}</td>
       <td class="r mono" style="color:${inc ? 'var(--green)' : 'var(--subtle)'}">${inc ? '+' + fmtC(inc, true) : '—'}</td>
@@ -1448,7 +1453,7 @@ async function renderYearly() {
       rows.push(`<tr style="opacity:.45"><td>${MONTHS_FULL[m]}</td><td class="r">—</td><td class="r">—</td><td class="r" style="color:var(--subtle);font-size:11px">нет данных</td></tr>`);
     } else {
       const net = inc - exp;
-      const isCurr = (m === _REPORT_MONTH);
+      const isCurr = (m === _TODAY_M && _REPORT_YEAR === _TODAY_Y);
       rows.push(`<tr style="${isCurr?'background:#1c1c22':''}">
         <td>${MONTHS_FULL[m]}${isCurr?' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>':''}</td>
         <td class="r mono" style="color:var(--green)">+${fmtC(inc,true)}</td>
