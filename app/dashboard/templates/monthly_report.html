@@ -1491,38 +1491,75 @@ async function renderYearly() {
 }
 
 async function renderAnnual() {
-  const months = await loadRange(`${_REPORT_YEAR}-01`, `${_REPORT_YEAR}-12`);
-  document.getElementById('a-title').textContent = `${_REPORT_YEAR}`;
-  let totInc = 0, totExp = 0, bestMonth = null, worstMonth = null;
-  months.forEach(m => {
-    const inc = Number(m.actual_income_rub || 0);
-    const exp = Number(m.actual_expense_rub || 0);
-    totInc += inc; totExp += exp;
-    const net = inc - exp;
-    if (!bestMonth || net > bestMonth.net) bestMonth = { mo:m.mo, net };
-    if (!worstMonth || exp > worstMonth.exp) worstMonth = { mo:m.mo, exp };
-  });
-  const sav = totInc ? Math.round((totInc-totExp)/totInc*100) : 0;
-  document.getElementById('a-stats').innerHTML = [
-    { label:'Доходы',  value:fmtC(totInc, true), accent:'var(--green)' },
-    { label:'Расходы', value:fmtC(totExp, true), accent:'var(--red)' },
-    { label:'Сальдо',  value:fmtC(totInc-totExp, true), accent:(totInc-totExp)>=0?'var(--green)':'var(--red)' },
-    { label:'Норма сбережений', value:sav+'%' },
-  ].map(c => `<div class="stat">
-    <div class="stat-label">${c.label}</div>
-    <div class="stat-val mono" style="${c.accent?'color:'+c.accent+';':''}">${c.value}</div>
-  </div>`).join('');
+  const { curr, prior } = _yPrevRange(_REPORT_YEAR);
+  document.getElementById('a-hero-amount').textContent = '…';
+  document.getElementById('a-hero-meta').innerHTML = '';
+  document.getElementById('a-compare').innerHTML = '<div style="padding:14px 16px;color:var(--muted);font-size:13px">Загрузка…</div>';
+  document.getElementById('a-movers').innerHTML = '';
+  document.getElementById('a-summary').innerHTML = '';
 
+  // Two separate loadRange calls so we don't depend on the RPC including a
+  // year column — each call returns 12 months within a single year.
+  const [priorRows, currRows, movers] = await Promise.all([
+    loadRange(prior.from, prior.to),
+    loadRange(curr.from,  curr.to),
+    loadMovers(curr.from, curr.to, prior.from, prior.to),
+  ]);
+
+  let pInc = 0, pExp = 0, cInc = 0, cExp = 0;
+  const currMonths = [];
+  for (const m of priorRows) {
+    pInc += Number(m.actual_income_rub  || 0);
+    pExp += Number(m.actual_expense_rub || 0);
+  }
+  for (const m of currRows) {
+    const inc = Number(m.actual_income_rub  || 0);
+    const exp = Number(m.actual_expense_rub || 0);
+    cInc += inc; cExp += exp;
+    currMonths.push({ mo: m.mo, inc, exp });
+  }
+  const cNet = cInc - cExp;
+  const pNet = pInc - pExp;
+  const cSav = cInc > 0 ? Math.round(cNet / cInc * 100) : null;
+
+  // Hero
+  document.getElementById('a-hero-label').textContent = `Сальдо года · ${curr.label}`;
+  document.getElementById('a-hero-amount').innerHTML = (cNet >= 0 ? '+' : '') + fmtC(cNet) + ' ' + _pctChip(_safePct(cNet, pNet));
+  const metaTxt = `доход ${fmtC(cInc, true)} · расход ${fmtC(cExp, true)}` + (cSav != null ? ` · норма ${cSav}%` : '');
+  document.getElementById('a-hero-meta').innerHTML = `<span class="hero-meta-muted">${metaTxt}</span>`;
+
+  // Compare
+  document.getElementById('a-compare').innerHTML = _compareTable({
+    priorLabel: prior.label,
+    currLabel:  curr.label,
+    prior: { income_rub: pInc, expense_rub: pExp },
+    curr:  { income_rub: cInc, expense_rub: cExp },
+  });
+
+  // Movers
+  if (!movers || movers._error) {
+    document.getElementById('a-movers').innerHTML = `<div class="mv-empty" style="padding:14px 16px">Не удалось загрузить движения (${movers ? movers._error : 'нет данных'})</div>`;
+  } else {
+    document.getElementById('a-movers').innerHTML = _moversList(movers.movers);
+  }
+
+  // Insights inset (preserved from previous Annual narrative)
+  let bestMonth = null, worstMonth = null;
+  currMonths.forEach(m => {
+    const net = m.inc - m.exp;
+    if (!bestMonth || net > bestMonth.net) bestMonth = { mo: m.mo, net };
+    if (!worstMonth || m.exp > worstMonth.exp) worstMonth = { mo: m.mo, exp: m.exp };
+  });
   let summary = '';
-  if (months.length === 0) {
+  if (currMonths.length === 0) {
     summary = '<div class="placeholder">Нет данных за этот год</div>';
   } else {
     summary = `<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:13px">
-      ${bestMonth ? `<li>📈 Лучший месяц по сальдо: <b>${MONTHS_FULL[bestMonth.mo]}</b> (${fmtC(bestMonth.net,true)})</li>` : ''}
-      ${worstMonth ? `<li>💸 Самый расходный месяц: <b>${MONTHS_FULL[worstMonth.mo]}</b> (${fmtC(worstMonth.exp,true)})</li>` : ''}
-      <li>📊 Месяцев с данными: <b>${months.length}</b> из 12</li>
-      <li>💰 Средний доход в месяц: <b>${fmtC(months.length ? totInc/months.length : 0, true)}</b></li>
-      <li>🧾 Средний расход в месяц: <b>${fmtC(months.length ? totExp/months.length : 0, true)}</b></li>
+      ${bestMonth ? `<li>📈 Лучший месяц по сальдо: <b>${MONTHS_FULL[bestMonth.mo]}</b> (${fmtC(bestMonth.net, true)})</li>` : ''}
+      ${worstMonth ? `<li>💸 Самый расходный месяц: <b>${MONTHS_FULL[worstMonth.mo]}</b> (${fmtC(worstMonth.exp, true)})</li>` : ''}
+      <li>📊 Месяцев с данными: <b>${currMonths.length}</b> из 12</li>
+      <li>💰 Средний доход в месяц: <b>${fmtC(currMonths.length ? cInc / currMonths.length : 0, true)}</b></li>
+      <li>🧾 Средний расход в месяц: <b>${fmtC(currMonths.length ? cExp / currMonths.length : 0, true)}</b></li>
     </ul>`;
   }
   document.getElementById('a-summary').innerHTML = summary;
