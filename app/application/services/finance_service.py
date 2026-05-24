@@ -1480,6 +1480,99 @@ class FinanceService:
             "movers":  movers,
         }
 
+    # ─── Per-month totals (actual + planned) — replaces monthly_totals RPC ──
+
+    def monthly_totals_via_rest(
+        self,
+        household_id: str,
+        p_from: str,   # YYYY-MM inclusive
+        p_to: str,     # YYYY-MM inclusive
+    ) -> list[dict[str, Any]]:
+        """Per-month income/expense totals across [p_from..p_to], RUB-converted.
+
+        Returns one row per (year, month) within the window that has any matching
+        transaction. Each row includes both actual and planned aggregates so the
+        dashboard can render planned future months without polluting actual
+        totals. Direction restricted to income/expense; internal transfers and
+        skipped rows are excluded everywhere.
+
+        Replaces the Supabase RPC `monthly_totals` (which only returned
+        actual_* and lives outside of Python migrations).
+        """
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+        import calendar as _cal
+        import datetime as _dt
+
+        fy, fm = [int(x) for x in p_from.split("-")]
+        ty, tm = [int(x) for x in p_to.split("-")]
+        last_day = _cal.monthrange(ty, tm)[1]
+        dt_start = _dt.datetime(fy, fm, 1, tzinfo=timezone.utc).isoformat()
+        dt_end = _dt.datetime(ty, tm, last_day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            txs = sb.get("transactions", {
+                "select": "occurred_at,direction,amount,currency,is_planned",
+                "household_id": f"eq.{household_id}",
+                "direction": "in.(income,expense)",
+                "is_internal_transfer": "eq.false",
+                "is_skipped": "eq.false",
+                "occurred_at": [f"gte.{dt_start}", f"lte.{dt_end}"],
+                "limit": "50000",
+            })
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "order": "date.desc",
+                "limit": "60",
+            })
+
+        fx_latest: dict[str, float] = {}
+        for r in fx_rows:
+            cur = (r.get("from_currency") or "").lower()
+            if cur and cur not in fx_latest:
+                fx_latest[cur] = float(r["rate"])
+
+        def _to_rub(amount: float, cur: str | None) -> float:
+            c = (cur or "rub").lower()
+            if c == "rub":
+                return amount
+            if c == "usdt":
+                c = "usd"
+            return amount * fx_latest.get(c, 1.0)
+
+        buckets: dict[tuple[int, int], dict[str, float]] = {}
+        for tx in txs:
+            occ = tx.get("occurred_at") or ""
+            try:
+                y = int(occ[0:4])
+                mo = int(occ[5:7])
+            except (ValueError, IndexError):
+                continue
+            key = (y, mo)
+            b = buckets.setdefault(key, {
+                "actual_income_rub": 0.0,
+                "actual_expense_rub": 0.0,
+                "planned_income_rub": 0.0,
+                "planned_expense_rub": 0.0,
+            })
+            amt = _to_rub(float(tx["amount"]), tx.get("currency"))
+            direction = tx.get("direction")
+            is_planned = bool(tx.get("is_planned"))
+            field = (
+                "planned_income_rub"  if is_planned and direction == "income"  else
+                "planned_expense_rub" if is_planned and direction == "expense" else
+                "actual_income_rub"   if direction == "income"                 else
+                "actual_expense_rub"
+            )
+            b[field] += amt
+
+        out: list[dict[str, Any]] = []
+        for (y, mo), b in sorted(buckets.items()):
+            out.append({"y": y, "mo": mo, **b})
+        return out
+
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 
     def upcoming_payments(self, household_id: str, days: int = 7, until_date: date | None = None) -> list[dict[str, Any]]:
