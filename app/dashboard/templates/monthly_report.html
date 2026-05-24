@@ -1223,6 +1223,129 @@ async function loadRange(fromYM, toYM) {
   } catch (e) { return []; }
 }
 
+// ─── Shared helpers for QoQ / YoY zones ────────────────────────────────────
+
+function _qPrevRange(year, month) {
+  // Given a month inside Qx, return [{fromYM, toYM}] for Qx-1 and Qx.
+  const qStart = Math.floor((month - 1) / 3) * 3 + 1;
+  const qEnd = qStart + 2;
+  const prevQStart = qStart - 3, prevQEnd = qEnd - 3;
+  const norm = (y, m) => {
+    while (m < 1)  { m += 12; y--; }
+    while (m > 12) { m -= 12; y++; }
+    return { y, m };
+  };
+  const a = norm(year, prevQStart), b = norm(year, prevQEnd);
+  const c = norm(year, qStart),     d = norm(year, qEnd);
+  const ym = ({y, m}) => `${y}-${String(m).padStart(2,'0')}`;
+  return {
+    curr:  { from: ym(c), to: ym(d), label: `Q${Math.ceil(qStart/3)} ${c.y}` },
+    prior: { from: ym(a), to: ym(b), label: `Q${Math.ceil(prevQStart<=0?(prevQStart+12)/3:prevQStart/3)} ${a.y}` },
+  };
+}
+
+function _yPrevRange(year) {
+  const ym = (y, m) => `${y}-${String(m).padStart(2,'0')}`;
+  return {
+    curr:  { from: ym(year,1),   to: ym(year,12),   label: `${year}` },
+    prior: { from: ym(year-1,1), to: ym(year-1,12), label: `${year-1}` },
+  };
+}
+
+function _pctChip(deltaPct, opts = {}) {
+  // opts.unit: '%' or 'pp' (percentage points, for savings-rate delta)
+  // opts.flatThreshold: |Δ| below this renders flat-styled
+  const unit = opts.unit || '%';
+  const ft   = (opts.flatThreshold != null) ? opts.flatThreshold : 1;
+  if (deltaPct == null || isNaN(deltaPct)) return `<span class="delta-chip flat">—</span>`;
+  const sign = deltaPct > 0 ? '▲ +' : deltaPct < 0 ? '▼ ' : '';
+  const cls  = Math.abs(deltaPct) < ft ? 'flat' : (deltaPct > 0 ? 'pos' : 'neg');
+  return `<span class="delta-chip ${cls}">${sign}${deltaPct}${unit}</span>`;
+}
+
+function _safePct(curr, prior) {
+  if (prior === 0 || prior == null) return null;
+  return Math.round((curr - prior) / prior * 100);
+}
+
+function _compareTable({ priorLabel, currLabel, prior, curr }) {
+  // prior/curr: { income_rub, expense_rub }
+  const incΔ  = _safePct(curr.income_rub, prior.income_rub);
+  const expΔ  = _safePct(curr.expense_rub, prior.expense_rub);
+  const netP  = prior.income_rub - prior.expense_rub;
+  const netC  = curr.income_rub - curr.expense_rub;
+  const netΔ  = _safePct(netC, netP);
+  const savP  = prior.income_rub > 0 ? Math.round(netP / prior.income_rub * 100) : null;
+  const savC  = curr.income_rub > 0  ? Math.round(netC / curr.income_rub * 100)  : null;
+  const savΔ  = (savP != null && savC != null) ? (savC - savP) : null;
+  const row = (label, p, c, deltaPct, unit) => `<tr>
+    <td class="l">${label}</td>
+    <td>${p == null ? '—' : fmtC(p, true)}</td>
+    <td>${c == null ? '—' : fmtC(c, true)}</td>
+    <td>${_pctChip(deltaPct, { unit: unit || '%', flatThreshold: unit === 'pp' ? 1 : 2 })}</td>
+  </tr>`;
+  const rowPct = (label, p, c, deltaPp) => `<tr>
+    <td class="l">${label}</td>
+    <td>${p == null ? '—' : p + '%'}</td>
+    <td>${c == null ? '—' : c + '%'}</td>
+    <td>${_pctChip(deltaPp, { unit: 'pp', flatThreshold: 1 })}</td>
+  </tr>`;
+  return `<table class="cmp-table">
+    <thead><tr><th class="l"></th><th>${esc(priorLabel)}</th><th>${esc(currLabel)}</th><th>Δ</th></tr></thead>
+    <tbody>
+      ${row('Доходы',  prior.income_rub,  curr.income_rub,  incΔ)}
+      ${row('Расходы', prior.expense_rub, curr.expense_rub, expΔ)}
+      ${row('Сальдо',  netP, netC, netΔ)}
+      ${rowPct('Норма сбережений', savP, savC, savΔ)}
+    </tbody>
+  </table>`;
+}
+
+function _moversList(movers) {
+  // movers: [{tag, current_rub, prior_rub, delta_rub, delta_pct}], sorted by abs(delta)
+  if (!movers || movers.length === 0) {
+    return `<div class="mv-grid"><div class="mv-col"><div class="mv-empty">Нет данных за прошлый период</div></div><div class="mv-col"><div class="mv-empty">—</div></div></div>`;
+  }
+  const ups   = movers.filter(m => m.delta_rub > 0).slice(0, 5);
+  const downs = movers.filter(m => m.delta_rub < 0).slice(0, 5);
+  const fmtDelta = (d) => (d > 0 ? '+' : '−') + fmtC(Math.abs(d), true);
+  const renderRow = (m) => {
+    const pctHtml = m.delta_pct == null
+      ? `<span class="mv-pct new">новая</span>`
+      : `<span class="mv-pct ${m.delta_pct >= 0 ? 'pos' : 'neg'}">${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%</span>`;
+    return `<div class="mv-row">
+      <span class="mv-tag">#${esc(m.tag)}</span>
+      <span class="mv-amt">${fmtDelta(m.delta_rub)}</span>
+      ${pctHtml}
+    </div>`;
+  };
+  return `<div class="mv-grid">
+    <div class="mv-col">
+      <div class="mv-col-head"><span style="color:var(--red)">↑</span> Выросли</div>
+      ${ups.length ? ups.map(renderRow).join('') : '<div class="mv-empty">Нет роста</div>'}
+    </div>
+    <div class="mv-col">
+      <div class="mv-col-head"><span style="color:var(--green)">↓</span> Сократились</div>
+      ${downs.length ? downs.map(renderRow).join('') : '<div class="mv-empty">Нет сокращений</div>'}
+    </div>
+  </div>`;
+}
+
+async function loadMovers(currFrom, currTo, prevFrom, prevTo) {
+  if (!HOUSEHOLD_ID) return null;
+  const url = new URL('/finance/category_movers', location.origin);
+  url.searchParams.set('household_id', HOUSEHOLD_ID);
+  url.searchParams.set('from', currFrom);
+  url.searchParams.set('to', currTo);
+  url.searchParams.set('prev_from', prevFrom);
+  url.searchParams.set('prev_to', prevTo);
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return { _error: `HTTP ${r.status}` };
+    return await r.json();
+  } catch (e) { return { _error: e.message }; }
+}
+
 async function renderQuarterly() {
   const qStart = Math.floor((_REPORT_MONTH - 1) / 3) * 3 + 1;
   const fromYM = `${_REPORT_YEAR}-${String(qStart).padStart(2,'0')}`;
