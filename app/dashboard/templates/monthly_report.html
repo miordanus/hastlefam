@@ -497,8 +497,14 @@ if (_INJECTED && _INJECTED.accounts) {
   HOUSEHOLD_ID = new URLSearchParams(location.search).get('household_id');
 }
 
-// FX rates: real from backend, fallback to plausible defaults
-const FX_RATES = (_INJECTED && _INJECTED.fx_rates) || { usd:73, eur:85, amd:0.2, pln:20, usdt:73 };
+// FX rates come from the backend (latest rows from the `fx_rates` table, RUB-quoted).
+// If absent we fall back to 1:1 — non-RUB amounts will render at face value rather than at
+// a multi-year-old hardcoded rate. The 1:1 is visibly wrong (and console.warn'd) so it's
+// caught immediately rather than quietly skewing totals.
+const FX_RATES = (_INJECTED && _INJECTED.fx_rates && Object.keys(_INJECTED.fx_rates).length)
+  ? _INJECTED.fx_rates
+  : (console.warn('[hastlefam] fx_rates missing from backend — falling back to 1:1, non-RUB totals will be visibly wrong'),
+     { usd:1, eur:1, amd:1, pln:1, usdt:1 });
 
 // ════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -789,8 +795,24 @@ async function txAction(id, action) {
   try {
     const resp = await fetch(`/finance/transactions/${id}/action`, { method:'POST', body:fd });
     if (!resp.ok) { alert('Не удалось — ' + resp.status); return; }
-    if (action === 'paid') _alertsPaidLocal.add(id);
-    setTimeout(() => location.reload(), 200);
+    // Optimistic in-place update — no full page reload.
+    const tx = LEDGER.find(t => t.id === id);
+    if (tx) {
+      if (action === 'paid') {
+        tx.is_planned = false;
+        tx.status = 'actual';
+        _alertsPaidLocal.add(id);
+      } else if (action === 'skip') {
+        tx.is_skipped = true;
+        _alertsDismissed.add(id);
+      }
+    }
+    // Re-render affected views. Hero/stats/cashflow depend on LEDGER, ledger lists rows by id.
+    renderAlerts();
+    renderStats();
+    renderHero();
+    renderLedger();
+    renderCashflowChart();
   } catch (e) { alert('Ошибка: ' + e.message); }
 }
 

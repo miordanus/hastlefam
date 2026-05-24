@@ -3,16 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.schemas.finance import SQLImportRequest, TransactionCorrectionUpdate
+from app.api.schemas.finance import SQLImportRequest
 from app.application.services.finance_service import FinanceService
 from app.application.services.import_service import ImportService
 from app.infrastructure.config.settings import get_settings
-from app.infrastructure.db.models import FinanceCategory, RecurringPayment, Transaction
 
 
 def _use_rest() -> bool:
@@ -58,36 +57,6 @@ def month_summary(household_id: str = Query(...), db: Session = Depends(get_db))
 def upcoming(household_id: str = Query(...), days: int = Query(7, ge=1, le=30), db: Session = Depends(get_db)) -> dict:
     items = FinanceService(db).upcoming_payments(household_id, days)
     return {"items": items}
-
-
-@router.get("/corrections", response_class=HTMLResponse)
-def corrections_page(
-    request: Request,
-    household_id: str = Query(...),
-    uncategorized: bool = Query(False),
-    db: Session = Depends(get_db),
-):
-    tx_query = db.query(Transaction).filter(Transaction.household_id == household_id)
-    if uncategorized:
-        tx_query = tx_query.filter(Transaction.category_id.is_(None))
-
-    tx_rows = tx_query.order_by(Transaction.occurred_at.desc()).limit(100).all()
-    categories = db.query(FinanceCategory).filter(
-        (FinanceCategory.household_id == household_id) | (FinanceCategory.household_id.is_(None))
-    ).order_by(FinanceCategory.name.asc()).all()
-    recurring = db.query(RecurringPayment).filter(RecurringPayment.household_id == household_id).all()
-
-    return templates.TemplateResponse(
-        request,
-        "finance_corrections.html",
-        {
-            "household_id": household_id,
-            "uncategorized": uncategorized,
-            "transactions": tx_rows,
-            "categories": categories,
-            "recurring": recurring,
-        },
-    )
 
 
 @router.get("/report", response_class=HTMLResponse)
@@ -223,22 +192,3 @@ def report_range(
             "p_to": p_to,
         })
     return {"months": rows}
-
-
-@router.post("/corrections/{transaction_id}")
-def update_correction(
-    transaction_id: str,
-    household_id: str = Form(...),
-    uncategorized: bool = Form(False),
-    primary_tag: str | None = Form(None),
-    db: Session = Depends(get_db),
-):
-    tx = db.get(Transaction, transaction_id)
-    if tx:
-        tag = (primary_tag or "").strip().lower() or None
-        tx.primary_tag = tag
-        db.commit()
-    return RedirectResponse(
-        url=f"/finance/corrections?household_id={household_id}&uncategorized={str(uncategorized).lower()}",
-        status_code=303,
-    )
