@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 # Смешивать нельзя нигде. Проверяй каждый новый запрос.
 
 from app.domain.enums import Currency, TransactionDirection
-from app.infrastructure.db.models import Account, BalanceSnapshot, PlannedPayment, Transaction
+from app.infrastructure.db.models import Account, BalanceSnapshot, FxRate, PlannedPayment, Transaction
 
 
 class FinanceService:
@@ -777,9 +777,63 @@ class FinanceService:
             for t, v in sorted(tag_map.items(), key=lambda x: -x[1])
         ]
 
+        # Latest FX rates per from_currency (to_currency=RUB). Mirrors monthly_report_via_rest.
+        fx_rows = (
+            self.db.query(FxRate)
+            .filter(FxRate.to_currency == "RUB")
+            .order_by(FxRate.from_currency.asc(), FxRate.date.desc())
+            .all()
+        )
+        fx_latest: dict[str, float] = {}
+        for r in fx_rows:
+            cur = (r.from_currency or "").lower()
+            if cur and cur not in fx_latest:
+                fx_latest[cur] = float(r.rate)
+
+        # Server-side balance computation (so frontend doesn't redo FX/snapshot math).
+        today_d = date.today()
+        is_current = (year == today_d.year and month == today_d.month)
+        today_iso = today_d.isoformat()
+
+        def _to_rub(amount: float, cur: str | None) -> float:
+            c = (cur or "rub").lower()
+            if c == "rub":
+                return amount
+            if c == "usdt":
+                c = "usd"
+            rate = fx_latest.get(c, 1.0)
+            return amount * rate
+
+        total_start_rub = 0.0
+        for a in accounts:
+            snap = snapshots.get(str(a.id))
+            if not snap:
+                continue
+            total_start_rub += _to_rub(snap["actual_balance"], a.currency.value if a.currency else None)
+
+        delta_rub = 0.0
+        for tx in txs:
+            if tx.is_planned or tx.is_internal_transfer:
+                continue
+            if tx.direction == TransactionDirection.EXCHANGE:
+                continue
+            occ = tx.occurred_at.strftime("%Y-%m-%d")
+            if is_current and occ > today_iso:
+                continue
+            rub = _to_rub(float(tx.amount), tx.currency.value if tx.currency else None)
+            if tx.direction == TransactionDirection.INCOME:
+                delta_rub += rub
+            elif tx.direction == TransactionDirection.EXPENSE:
+                delta_rub -= rub
+
+        balance_value_rub = total_start_rub + delta_rub
+
         return {
             "year": year,
             "month": month,
+            "household_id": str(hid),
+            "is_current_month": is_current,
+            "balance_value_rub": balance_value_rub,
             "accounts": [
                 {"id": str(a.id), "name": a.name, "currency": a.currency.value}
                 for a in accounts
@@ -803,6 +857,7 @@ class FinanceService:
                 for tx in txs
             ],
             "tag_summary": tag_summary,
+            "fx_rates": fx_latest,
         }
 
     def monthly_report_via_rest(self, household_id: str, year: int, month: int) -> dict[str, Any]:
