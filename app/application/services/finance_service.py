@@ -16,6 +16,55 @@ from app.domain.enums import Currency, TransactionDirection
 from app.infrastructure.db.models import Account, BalanceSnapshot, PlannedPayment, Transaction
 
 
+# ─── REST-mode FX helpers (per-date conversion) ──────────────────────────────
+# Used by the *_via_rest service methods. Mirror fx_service.convert_to_rub
+# semantics (date-aware, 7-day backward fallback) but operate over
+# bulk-fetched fx_rates rows instead of a SQLAlchemy session.
+
+def _build_fx_lookup(fx_rows: list[dict]) -> dict[str, list[tuple[str, float]]]:
+    """{currency_lower -> [(date_str, rate), …]} sorted by date desc per currency."""
+    by_cur: dict[str, list[tuple[str, float]]] = {}
+    for r in fx_rows:
+        cur = (r.get("from_currency") or "").lower()
+        if not cur:
+            continue
+        by_cur.setdefault(cur, []).append(((r.get("date") or "")[:10], float(r["rate"])))
+    for k in by_cur:
+        by_cur[k].sort(key=lambda x: x[0], reverse=True)
+    return by_cur
+
+
+def _rub_on_date(
+    amount: float,
+    currency: str | None,
+    occurred_date: str | None,
+    fx_by_cur: dict[str, list[tuple[str, float]]],
+) -> float:
+    """Convert amount to RUB using the fx_rate on/before occurred_date (7-day fallback).
+
+    Falls back to 1.0 if no rate found within 7 days; same silent behaviour as the
+    previous latest-only lookup. Missing-rate cells should be backfilled separately.
+    """
+    cur = (currency or "rub").lower()
+    if cur == "rub":
+        return amount
+    if cur == "usdt":
+        cur = "usd"
+    rates = fx_by_cur.get(cur, [])
+    d_iso = (occurred_date or "")[:10]
+    if not d_iso:
+        return amount * rates[0][1] if rates else amount
+    try:
+        d = date.fromisoformat(d_iso)
+        cutoff = (d - timedelta(days=7)).isoformat()
+    except ValueError:
+        cutoff = ""
+    for row_date, rate in rates:
+        if cutoff <= row_date <= d_iso:
+            return amount * rate
+    return amount  # silent 1:1; backfill fx_rates if this matters
+
+
 class FinanceService:
     def __init__(self, db: Session):
         self.db = db
@@ -872,18 +921,22 @@ class FinanceService:
                             "as_of": (r.get("created_at") or "")[:10],
                         }
 
-            # Latest FX rates (one row per currency)
+            # FX rates: pull a window covering the viewed month + a 14-day backward
+            # buffer (so the per-date helper's 7-day fallback always has data even
+            # near the window's left edge). Also include rows up to today, since the
+            # account-card "latest_snapshots" convert at the most-recent snapshot
+            # date, which can be after end_dt of the viewed month.
+            fx_window_start = (start_dt - timedelta(days=14)).date().isoformat()
+            today_iso_d = date.today().isoformat()
             fx_rows = sb.get("fx_rates", {
                 "select": "from_currency,rate,date",
                 "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{today_iso_d}"],
                 "order": "date.desc",
-                "limit": "60",
             })
-            fx_latest: dict[str, float] = {}
-            for r in fx_rows:
-                cur = (r.get("from_currency") or "").lower()
-                if cur and cur not in fx_latest:
-                    fx_latest[cur] = float(r["rate"])
+            fx_by_cur = _build_fx_lookup(fx_rows)
+            # Latest-per-currency view (kept for frontend payload compat).
+            fx_latest: dict[str, float] = {cur: rows[0][1] for cur, rows in fx_by_cur.items() if rows}
 
         today = date.today()
         tag_map: dict[str, float] = {}
@@ -930,40 +983,48 @@ class FinanceService:
         is_current = (year == today_d.year and month == today_d.month)
         today_iso = today_d.isoformat()
 
-        def _to_rub(amount: float, cur: str | None) -> float:
-            c = (cur or "rub").lower()
-            if c == "rub":
-                return amount
-            if c == "usdt":
-                c = "usd"
-            rate = fx_latest.get(c, 1.0)
-            return amount * rate
-
+        # Anchor-snapshot RUB conversion uses the snapshot's own date.
         total_start_rub = 0.0
         for a in accounts:
             snap = snapshots.get(a["id"])
             if not snap:
                 continue
-            total_start_rub += _to_rub(snap["actual_balance"], a.get("currency"))
+            total_start_rub += _rub_on_date(
+                snap["actual_balance"], a.get("currency"), snap.get("as_of"), fx_by_cur,
+            )
 
+        # Transaction deltas: each converts at its own occurred_at date.
+        # delta_rub: actual income/expense up to today (current view) or for the whole
+        #            month (past/future views).
+        # forecast_planned_rub: planned-not-yet-actual income/expense, used for the
+        #            EOM forecast in current+future views; ignored for past views.
+        is_future = (year > today_d.year) or (year == today_d.year and month > today_d.month)
         delta_rub = 0.0
+        forecast_planned_rub = 0.0
         for tx in txs:
-            if tx.get("is_planned"):
-                continue
             if tx.get("is_internal_transfer"):
                 continue
             if tx.get("direction") == "exchange":
                 continue
             occ = (tx.get("occurred_at") or "")[:10]
+            sign = 1 if tx.get("direction") == "income" else (-1 if tx.get("direction") == "expense" else 0)
+            if sign == 0:
+                continue
+            rub = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
+            if tx.get("is_planned"):
+                if is_current and occ > today_iso:
+                    forecast_planned_rub += sign * rub
+                elif is_future:
+                    forecast_planned_rub += sign * rub
+                # past months: planned rows ignored — what didn't happen didn't happen
+                continue
             if is_current and occ > today_iso:
                 continue
-            rub = _to_rub(float(tx["amount"]), tx.get("currency"))
-            if tx.get("direction") == "income":
-                delta_rub += rub
-            elif tx.get("direction") == "expense":
-                delta_rub -= rub
+            delta_rub += sign * rub
 
         balance_value_rub = total_start_rub + delta_rub
+        # EOM forecast: only meaningful for current or future months.
+        forecast_eom_rub = balance_value_rub + forecast_planned_rub if (is_current or is_future) else balance_value_rub
 
         return {
             "year": year,
@@ -971,6 +1032,8 @@ class FinanceService:
             "household_id": household_id,
             "is_current_month": is_current,
             "balance_value_rub": balance_value_rub,
+            "start_balance_rub": total_start_rub,
+            "forecast_eom_rub": forecast_eom_rub,
             "accounts": [
                 {"id": a["id"], "name": a["name"], "currency": a["currency"]}
                 for a in accounts
@@ -1402,6 +1465,9 @@ class FinanceService:
         # PostgREST range covers both windows; filter into buckets in Python.
         full_start_dt = min(curr_start_dt, prev_start_dt)
         full_end_dt = max(curr_end_dt, prev_end_dt)
+        # FX window: 14d before the earliest period start, latest needed = full_end_dt's date.
+        full_start_date = _dt.date.fromisoformat(full_start_dt[:10])
+        fx_window_start = (full_start_date - _dt.timedelta(days=14)).isoformat()
 
         s = get_settings()
         with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
@@ -1418,23 +1484,11 @@ class FinanceService:
             fx_rows = sb.get("fx_rates", {
                 "select": "from_currency,rate,date",
                 "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{full_end_dt[:10]}"],
                 "order": "date.desc",
-                "limit": "60",
             })
 
-        fx_latest: dict[str, float] = {}
-        for r in fx_rows:
-            cur = (r.get("from_currency") or "").lower()
-            if cur and cur not in fx_latest:
-                fx_latest[cur] = float(r["rate"])
-
-        def _to_rub(amount: float, cur: str | None) -> float:
-            c = (cur or "rub").lower()
-            if c == "rub":
-                return amount
-            if c == "usdt":
-                c = "usd"
-            return amount * fx_latest.get(c, 1.0)
+        fx_by_cur = _build_fx_lookup(fx_rows)
 
         curr_by_tag: dict[str, float] = {}
         prior_by_tag: dict[str, float] = {}
@@ -1443,7 +1497,7 @@ class FinanceService:
 
         for tx in txs:
             occ = (tx.get("occurred_at") or "")[:10]
-            amount_rub = _to_rub(float(tx["amount"]), tx.get("currency"))
+            amount_rub = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
             tag = tx.get("primary_tag") or "(без тега)"
             if curr_start <= occ <= curr_end:
                 curr_by_tag[tag] = curr_by_tag.get(tag, 0.0) + amount_rub
@@ -1507,8 +1561,10 @@ class FinanceService:
         fy, fm = [int(x) for x in p_from.split("-")]
         ty, tm = [int(x) for x in p_to.split("-")]
         last_day = _cal.monthrange(ty, tm)[1]
-        dt_start = _dt.datetime(fy, fm, 1, tzinfo=timezone.utc).isoformat()
+        window_start = _dt.datetime(fy, fm, 1, tzinfo=timezone.utc)
+        dt_start = window_start.isoformat()
         dt_end = _dt.datetime(ty, tm, last_day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+        fx_window_start = (window_start - _dt.timedelta(days=14)).date().isoformat()
 
         s = get_settings()
         with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
@@ -1524,23 +1580,11 @@ class FinanceService:
             fx_rows = sb.get("fx_rates", {
                 "select": "from_currency,rate,date",
                 "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{dt_end[:10]}"],
                 "order": "date.desc",
-                "limit": "60",
             })
 
-        fx_latest: dict[str, float] = {}
-        for r in fx_rows:
-            cur = (r.get("from_currency") or "").lower()
-            if cur and cur not in fx_latest:
-                fx_latest[cur] = float(r["rate"])
-
-        def _to_rub(amount: float, cur: str | None) -> float:
-            c = (cur or "rub").lower()
-            if c == "rub":
-                return amount
-            if c == "usdt":
-                c = "usd"
-            return amount * fx_latest.get(c, 1.0)
+        fx_by_cur = _build_fx_lookup(fx_rows)
 
         buckets: dict[tuple[int, int], dict[str, float]] = {}
         for tx in txs:
@@ -1557,7 +1601,7 @@ class FinanceService:
                 "planned_income_rub": 0.0,
                 "planned_expense_rub": 0.0,
             })
-            amt = _to_rub(float(tx["amount"]), tx.get("currency"))
+            amt = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
             direction = tx.get("direction")
             is_planned = bool(tx.get("is_planned"))
             field = (
