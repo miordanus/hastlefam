@@ -1347,51 +1347,84 @@ async function loadMovers(currFrom, currTo, prevFrom, prevTo) {
 }
 
 async function renderQuarterly() {
-  const qStart = Math.floor((_REPORT_MONTH - 1) / 3) * 3 + 1;
-  const fromYM = `${_REPORT_YEAR}-${String(qStart).padStart(2,'0')}`;
-  const toYM   = `${_REPORT_YEAR}-${String(qStart+2).padStart(2,'0')}`;
-  const months = await loadRange(fromYM, toYM);
-  const byMo = new Map(months.map(m => [m.mo, m]));
-  document.getElementById('q-title').textContent = `Q${Math.ceil(_REPORT_MONTH/3)} ${_REPORT_YEAR}`;
-  document.getElementById('q-range').textContent = `${MONTHS_FULL[qStart]} – ${MONTHS_FULL[qStart+2]} ${_REPORT_YEAR}`;
+  const { curr, prior } = _qPrevRange(_REPORT_YEAR, _REPORT_MONTH);
+  document.getElementById('q-hero-amount').textContent = '…';
+  document.getElementById('q-hero-meta').innerHTML = '';
+  document.getElementById('q-compare').innerHTML = '<div style="padding:14px 16px;color:var(--muted);font-size:13px">Загрузка…</div>';
+  document.getElementById('q-movers').innerHTML = '';
+  document.getElementById('q-body').innerHTML = '';
 
-  let totInc = 0, totExp = 0;
+  // Parallel fetch: two separate loadRange calls (prior Q, current Q) so we
+  // don't depend on the RPC including a year column — each call returns 3
+  // months within a single year, identifiable by m.mo alone.
+  const [priorMonths, currMonths, movers] = await Promise.all([
+    loadRange(prior.from, prior.to),
+    loadRange(curr.from,  curr.to),
+    loadMovers(curr.from, curr.to, prior.from, prior.to),
+  ]);
+
+  const sumIncExp = (rows) => rows.reduce((acc, m) => {
+    acc.inc += Number(m.actual_income_rub  || 0);
+    acc.exp += Number(m.actual_expense_rub || 0);
+    return acc;
+  }, { inc: 0, exp: 0 });
+  const p = sumIncExp(priorMonths);
+  const c = sumIncExp(currMonths);
+  let pInc = p.inc, pExp = p.exp, cInc = c.inc, cExp = c.exp;
+  const [cfy, cfm] = curr.from.split('-').map(Number);
+  const cNet = cInc - cExp;
+  const pNet = pInc - pExp;
+  const cSav = cInc > 0 ? Math.round(cNet / cInc * 100) : null;
+
+  // Hero
+  document.getElementById('q-hero-label').textContent = `Сальдо квартала · ${curr.label}`;
+  document.getElementById('q-hero-amount').innerHTML = (cNet >= 0 ? '+' : '') + fmtC(cNet) + ' ' + _pctChip(_safePct(cNet, pNet));
+  const metaTxt = `доход ${fmtC(cInc, true)} · расход ${fmtC(cExp, true)}` +
+                  (cSav != null ? ` · норма ${cSav}%` : '');
+  document.getElementById('q-hero-meta').innerHTML = `<span class="hero-meta-muted">${metaTxt}</span>`;
+
+  // Compare
+  document.getElementById('q-compare').innerHTML = _compareTable({
+    priorLabel: prior.label,
+    currLabel:  curr.label,
+    prior: { income_rub: pInc, expense_rub: pExp },
+    curr:  { income_rub: cInc, expense_rub: cExp },
+  });
+
+  // Movers
+  if (!movers || movers._error) {
+    document.getElementById('q-movers').innerHTML = `<div class="mv-empty" style="padding:14px 16px">Не удалось загрузить движения (${movers ? movers._error : 'нет данных'})</div>`;
+  } else {
+    document.getElementById('q-movers').innerHTML = _moversList(movers.movers);
+  }
+
+  // Per-month rows (current quarter only — 3 rows + total)
+  const qStart = cfm;
+  const currByMo = new Map(currMonths.map(m => [m.mo, m]));
   const rows = [];
-  for (let m = qStart; m <= qStart+2; m++) {
-    const r = byMo.get(m);
+  for (let mm = qStart; mm <= qStart + 2; mm++) {
+    const r = currByMo.get(mm);
     const inc = r ? Number(r.actual_income_rub  || 0) : 0;
     const exp = r ? Number(r.actual_expense_rub || 0) : 0;
-    totInc += inc; totExp += exp;
     const net = inc - exp;
     const sav = inc > 0 ? Math.round(net / inc * 100) : null;
-    const isCurr = (m === _REPORT_MONTH);
-    rows.push(`<tr style="${isCurr?'background:#1c1c22':''}">
-      <td>${MONTHS_FULL[m]}${isCurr?' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>':''}</td>
-      <td class="r mono" style="color:${inc?'var(--green)':'var(--subtle)'}">${inc?'+'+fmtC(inc,true):'—'}</td>
-      <td class="r mono" style="color:${exp?'var(--red)':'var(--subtle)'}">${exp?'−'+fmtC(exp,true):'—'}</td>
-      <td class="r mono" style="color:${net>=0?'var(--green)':'var(--red)'}">${(net>=0?'+':'')+fmtC(net,true)}</td>
-      <td class="r mono">${sav===null?'—':sav+'%'}</td>
+    const isCurr = (mm === _REPORT_MONTH && cfy === _REPORT_YEAR);
+    rows.push(`<tr style="${isCurr ? 'background:#1c1c22' : ''}">
+      <td>${MONTHS_FULL[mm]}${isCurr ? ' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>' : ''}</td>
+      <td class="r mono" style="color:${inc ? 'var(--green)' : 'var(--subtle)'}">${inc ? '+' + fmtC(inc, true) : '—'}</td>
+      <td class="r mono" style="color:${exp ? 'var(--red)' : 'var(--subtle)'}">${exp ? '−' + fmtC(exp, true) : '—'}</td>
+      <td class="r mono" style="color:${net >= 0 ? 'var(--green)' : 'var(--red)'}">${(net >= 0 ? '+' : '') + fmtC(net, true)}</td>
+      <td class="r mono">${sav == null ? '—' : sav + '%'}</td>
     </tr>`);
   }
   rows.push(`<tr style="border-top:2px solid var(--border)">
-    <td style="font-weight:600">Итого Q${Math.ceil(_REPORT_MONTH/3)}</td>
-    <td class="r mono" style="color:var(--green)">+${fmtC(totInc,true)}</td>
-    <td class="r mono" style="color:var(--red)">−${fmtC(totExp,true)}</td>
-    <td class="r mono" style="color:${(totInc-totExp)>=0?'var(--green)':'var(--red)'}">${(totInc-totExp>=0?'+':'')+fmtC(totInc-totExp,true)}</td>
-    <td class="r mono">${totInc?Math.round((totInc-totExp)/totInc*100)+'%':'—'}</td>
+    <td style="font-weight:600">Итого ${curr.label}</td>
+    <td class="r mono" style="color:var(--green)">+${fmtC(cInc, true)}</td>
+    <td class="r mono" style="color:var(--red)">−${fmtC(cExp, true)}</td>
+    <td class="r mono" style="color:${cNet >= 0 ? 'var(--green)' : 'var(--red)'}">${(cNet >= 0 ? '+' : '') + fmtC(cNet, true)}</td>
+    <td class="r mono">${cSav == null ? '—' : cSav + '%'}</td>
   </tr>`);
   document.getElementById('q-body').innerHTML = rows.join('');
-
-  const sav = totInc ? Math.round((totInc-totExp)/totInc*100) : 0;
-  document.getElementById('q-stats').innerHTML = [
-    { label:'Доходы',  value:fmtC(totInc, true), accent:'var(--green)' },
-    { label:'Расходы', value:fmtC(totExp, true), accent:'var(--red)' },
-    { label:'Сальдо',  value:fmtC(totInc-totExp, true), accent:(totInc-totExp)>=0?'var(--green)':'var(--red)' },
-    { label:'Норма сбережений', value:sav+'%' },
-  ].map(c => `<div class="stat">
-    <div class="stat-label">${c.label}</div>
-    <div class="stat-val mono" style="${c.accent?'color:'+c.accent+';':''}">${c.value}</div>
-  </div>`).join('');
 }
 
 let _yChart = null;
