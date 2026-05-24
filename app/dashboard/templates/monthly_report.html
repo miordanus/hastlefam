@@ -1268,6 +1268,10 @@ function _pctChip(deltaPct, opts = {}) {
   return `<span class="delta-chip ${cls}">${sign}${deltaPct}${unit}</span>`;
 }
 
+function _planChip() {
+  return `<span style="font-size:9px;background:rgba(99,102,241,0.18);color:var(--accent);border:1px solid rgba(99,102,241,0.45);border-radius:3px;padding:1px 5px;margin-left:4px;letter-spacing:.04em">план</span>`;
+}
+
 function _safePct(curr, prior) {
   if (prior === 0 || prior == null) return null;
   return Math.round((curr - prior) / prior * 100);
@@ -1411,9 +1415,24 @@ async function renderQuarterly() {
     const r = currByMo.get(mm);
     const inc = r ? Number(r.actual_income_rub  || 0) : 0;
     const exp = r ? Number(r.actual_expense_rub || 0) : 0;
+    const plInc = r ? Number(r.planned_income_rub  || 0) : 0;
+    const plExp = r ? Number(r.planned_expense_rub || 0) : 0;
+    const isCurr = (mm === _TODAY_M && cfy === _TODAY_Y);
+    const isFuture = (cfy > _TODAY_Y) || (cfy === _TODAY_Y && mm > _TODAY_M);
+    const hasActual = inc > 0 || exp > 0;
+    if (!hasActual && isFuture && (plInc > 0 || plExp > 0)) {
+      const plNet = plInc - plExp;
+      rows.push(`<tr style="opacity:.55">
+        <td>${MONTHS_FULL[mm]} ${_planChip()}</td>
+        <td class="r mono" style="color:var(--green)">${plInc ? '+' + fmtC(plInc, true) : '—'}</td>
+        <td class="r mono" style="color:var(--red)">${plExp ? '−' + fmtC(plExp, true) : '—'}</td>
+        <td class="r mono" style="color:${plNet >= 0 ? 'var(--green)' : 'var(--red)'}">${(plNet >= 0 ? '+' : '') + fmtC(plNet, true)}</td>
+        <td class="r mono">—</td>
+      </tr>`);
+      continue;
+    }
     const net = inc - exp;
     const sav = inc > 0 ? Math.round(net / inc * 100) : null;
-    const isCurr = (mm === _TODAY_M && cfy === _TODAY_Y);
     rows.push(`<tr style="${isCurr ? 'background:#1c1c22' : ''}">
       <td>${MONTHS_FULL[mm]}${isCurr ? ' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>' : ''}</td>
       <td class="r mono" style="color:${inc ? 'var(--green)' : 'var(--subtle)'}">${inc ? '+' + fmtC(inc, true) : '—'}</td>
@@ -1446,10 +1465,24 @@ async function renderYearly() {
     const r = byMo.get(m);
     const inc = r ? Number(r.actual_income_rub  || 0) : 0;
     const exp = r ? Number(r.actual_expense_rub || 0) : 0;
+    const plInc = r ? Number(r.planned_income_rub  || 0) : 0;
+    const plExp = r ? Number(r.planned_expense_rub || 0) : 0;
+    const hasActual = inc > 0 || exp > 0;
+    const hasPlanned = plInc > 0 || plExp > 0;
+    const isFuture = (_REPORT_YEAR > _TODAY_Y) || (_REPORT_YEAR === _TODAY_Y && m > _TODAY_M);
+    // Chart + YTD totals: actual only, regardless of planned visibility.
     incData.push(inc || null);
     expData.push(exp || null);
-    if (r) { totInc += inc; totExp += exp; monthCount++; }
-    if (!r) {
+    if (hasActual) { totInc += inc; totExp += exp; monthCount++; }
+    if (!hasActual && isFuture && hasPlanned) {
+      const plNet = plInc - plExp;
+      rows.push(`<tr style="opacity:.55">
+        <td>${MONTHS_FULL[m]} ${_planChip()}</td>
+        <td class="r mono" style="color:var(--green)">${plInc ? '+' + fmtC(plInc, true) : '—'}</td>
+        <td class="r mono" style="color:var(--red)">${plExp ? '−' + fmtC(plExp, true) : '—'}</td>
+        <td class="r mono" style="color:${plNet >= 0 ? 'var(--green)' : 'var(--red)'}">${(plNet >= 0 ? '+' : '') + fmtC(plNet, true)}</td>
+      </tr>`);
+    } else if (!hasActual) {
       rows.push(`<tr style="opacity:.45"><td>${MONTHS_FULL[m]}</td><td class="r">—</td><td class="r">—</td><td class="r" style="color:var(--subtle);font-size:11px">нет данных</td></tr>`);
     } else {
       const net = inc - exp;
