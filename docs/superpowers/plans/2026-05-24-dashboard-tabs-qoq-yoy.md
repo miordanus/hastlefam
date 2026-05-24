@@ -33,7 +33,7 @@ Tests: existing REST-mode service methods (`monthly_report_via_rest`, `cashflow_
 **Files:**
 - Modify: `app/application/services/finance_service.py` (append a new method near the existing `cashflow_monthly_via_rest`)
 
-- [ ] **Step 1: Add the method to `FinanceService`**
+- [x] **Step 1: Add the method to `FinanceService`**
 
 Append after the existing `cashflow_monthly_via_rest` method (or anywhere among the `*_via_rest` methods):
 
@@ -150,12 +150,12 @@ Append after the existing `cashflow_monthly_via_rest` method (or anywhere among 
         }
 ```
 
-- [ ] **Step 2: Syntax-check**
+- [x] **Step 2: Syntax-check**
 
 Run: `python3 -m py_compile app/application/services/finance_service.py`
 Expected: silent success (no traceback).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/application/services/finance_service.py
@@ -173,7 +173,7 @@ explicit handling for newly-used categories (delta_pct=null)."
 **Files:**
 - Modify: `app/api/routers/finance.py` (append a new route after `/finance/report/range`)
 
-- [ ] **Step 1: Add the route**
+- [x] **Step 1: Add the route**
 
 Append after the `report_range` function (end of file):
 
@@ -203,12 +203,12 @@ def category_movers(
     )
 ```
 
-- [ ] **Step 2: Syntax-check**
+- [x] **Step 2: Syntax-check**
 
 Run: `python3 -m py_compile app/api/routers/finance.py`
 Expected: silent success.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/api/routers/finance.py
@@ -226,7 +226,7 @@ Returns 503 if SUPABASE_URL/SERVICE_ROLE_KEY not configured (matches
 **Files:**
 - Modify: `app/dashboard/templates/monthly_report.html` (lines ~363–402 for the existing Quarterly/Yearly/Annual blocks; we touch Quarterly + Annual only)
 
-- [ ] **Step 1: Replace the Quarterly tab block**
+- [x] **Step 1: Replace the Quarterly tab block**
 
 Find:
 
@@ -281,7 +281,7 @@ Replace with:
   </div>
 ```
 
-- [ ] **Step 2: Replace the Annual tab block**
+- [x] **Step 2: Replace the Annual tab block**
 
 Find:
 
@@ -326,7 +326,7 @@ Replace with:
   </div>
 ```
 
-- [ ] **Step 3: Add CSS for the compare-table and movers-list zones**
+- [x] **Step 3: Add CSS for the compare-table and movers-list zones**
 
 Find the `/* ── Section card (quarter/year/annual placeholders) ── */` block and add the following AFTER its `.placeholder` rule, before `</style>`:
 
@@ -366,7 +366,7 @@ Find the `/* ── Section card (quarter/year/annual placeholders) ── */` b
 .delta-chip.flat { background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/dashboard/templates/monthly_report.html
@@ -383,7 +383,7 @@ movers / months zones. Adds .cmp-table, .mv-grid, .delta-chip styles."
 **Files:**
 - Modify: `app/dashboard/templates/monthly_report.html` (insert helpers near the existing `loadRange` / Quarterly helpers section, around line ~1180)
 
-- [ ] **Step 1: Add the helpers**
+- [x] **Step 1: Add the helpers**
 
 Insert immediately AFTER the `loadRange` function (just before `async function renderQuarterly`):
 
@@ -512,7 +512,7 @@ async function loadMovers(currFrom, currTo, prevFrom, prevTo) {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add app/dashboard/templates/monthly_report.html
@@ -531,7 +531,7 @@ loadMovers fetches the new /finance/category_movers endpoint."
 **Files:**
 - Modify: `app/dashboard/templates/monthly_report.html` — replace existing `renderQuarterly` function (currently around line ~1200–1246)
 
-- [ ] **Step 1: Replace `renderQuarterly`**
+- [x] **Step 1: Replace `renderQuarterly`**
 
 Find the existing `async function renderQuarterly() { ... }` block and replace its entire body (keep the `async function renderQuarterly()` signature) with:
 
@@ -618,7 +618,7 @@ async function renderQuarterly() {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add app/dashboard/templates/monthly_report.html
@@ -636,7 +636,7 @@ keep the existing 'текущий' badge for the current month."
 **Files:**
 - Modify: `app/dashboard/templates/monthly_report.html` — replace existing `renderAnnual` function (currently around line ~1311–1347)
 
-- [ ] **Step 1: Replace `renderAnnual`**
+- [x] **Step 1: Replace `renderAnnual`**
 
 Find the existing `async function renderAnnual() { ... }` block and replace its entire body (keep signature) with:
 
@@ -717,7 +717,7 @@ async function renderAnnual() {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add app/dashboard/templates/monthly_report.html
@@ -735,7 +735,7 @@ preserved here and dropped from the Yearly tab tail."
 **Files:**
 - Modify: `app/dashboard/templates/monthly_report.html` — three small JS edits
 
-- [ ] **Step 1: Modify `switchTab` to update the URL**
+- [x] **Step 1: Modify `switchTab` to update the URL**
 
 Find:
 
@@ -764,7 +764,7 @@ function switchTab(tab) {
 }
 ```
 
-- [ ] **Step 2: Modify `navPeriod` to carry the tab**
+- [x] **Step 2: Modify `navPeriod` to carry the tab**
 
 Find:
 
@@ -816,7 +816,7 @@ function navPeriod(delta) {
 }
 ```
 
-- [ ] **Step 3: Read the tab from the URL on boot**
+- [x] **Step 3: Read the tab from the URL on boot**
 
 Find the very end of the `<script>` block where the page boots (look for `renderActiveTab()` being called without `switchTab`, or the IIFE that calls `renderMonthly`/initial render). Right before that initial render runs, insert:
 
@@ -856,7 +856,7 @@ if (_initialTab && _initialTab !== 'monthly' && document.getElementById(`tab-${_
 }
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/dashboard/templates/monthly_report.html
