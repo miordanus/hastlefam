@@ -69,7 +69,7 @@ def corrections_page(
 ):
     tx_query = db.query(Transaction).filter(Transaction.household_id == household_id)
     if uncategorized:
-        tx_query = tx_query.filter(Transaction.category_id.is_(None))
+        tx_query = tx_query.filter(Transaction.primary_tag.is_(None))
 
     tx_rows = tx_query.order_by(Transaction.occurred_at.desc()).limit(100).all()
     categories = db.query(FinanceCategory).filter(
