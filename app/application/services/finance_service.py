@@ -56,9 +56,10 @@ def _rub_on_date(
         return amount * rates[0][1] if rates else amount
     try:
         d = date.fromisoformat(d_iso)
-        cutoff = (d - timedelta(days=7)).isoformat()
     except ValueError:
-        cutoff = ""
+        # Unparseable date → can't do a meaningful per-date lookup. Silent 1:1.
+        return amount
+    cutoff = (d - timedelta(days=7)).isoformat()
     for row_date, rate in rates:
         if cutoff <= row_date <= d_iso:
             return amount * rate
@@ -1012,11 +1013,13 @@ class FinanceService:
                 continue
             rub = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
             if tx.get("is_planned"):
-                if is_current and occ > today_iso:
+                # Current or future month: planned rows belong to EOM forecast,
+                # regardless of whether occurred_at is before or after today.
+                # Overdue planned (occ <= today in current view) is still expected
+                # to happen this month; it just hasn't materialised yet.
+                # Past months: planned rows ignored — what didn't happen didn't happen.
+                if is_current or is_future:
                     forecast_planned_rub += sign * rub
-                elif is_future:
-                    forecast_planned_rub += sign * rub
-                # past months: planned rows ignored — what didn't happen didn't happen
                 continue
             if is_current and occ > today_iso:
                 continue
@@ -1026,6 +1029,27 @@ class FinanceService:
         # EOM forecast: only meaningful for current or future months.
         forecast_eom_rub = balance_value_rub + forecast_planned_rub if (is_current or is_future) else balance_value_rub
 
+        # Per-account RUB balance computed at the LATEST snapshot's own date.
+        # Single source of truth for the dashboard account cards — frontend renders
+        # this directly instead of calling toRub() with today's FX (which produced
+        # silent drift whenever FX moved between the snapshot date and today).
+        account_payload = []
+        for a in accounts:
+            latest = latest_snapshots.get(a["id"]) or {}
+            native = latest.get("actual_balance")
+            balance_rub = (
+                _rub_on_date(float(native), a.get("currency"), latest.get("as_of"), fx_by_cur)
+                if native is not None else None
+            )
+            account_payload.append({
+                "id": a["id"],
+                "name": a["name"],
+                "currency": a["currency"],
+                "balance_native": float(native) if native is not None else None,
+                "balance_rub": balance_rub,
+                "balance_as_of": latest.get("as_of"),
+            })
+
         return {
             "year": year,
             "month": month,
@@ -1034,10 +1058,7 @@ class FinanceService:
             "balance_value_rub": balance_value_rub,
             "start_balance_rub": total_start_rub,
             "forecast_eom_rub": forecast_eom_rub,
-            "accounts": [
-                {"id": a["id"], "name": a["name"], "currency": a["currency"]}
-                for a in accounts
-            ],
+            "accounts": account_payload,
             "snapshots": snapshots,
             "latest_snapshots": latest_snapshots,
             "transactions": out_txs,

@@ -824,13 +824,18 @@ function renderHero() {
 function renderAccounts() {
   const row = document.getElementById('acc-row');
   row.innerHTML = ACCOUNTS.map(a => {
-    // For the CURRENT month, prefer the latest snapshot (truth as of today)
-    // and ignore the stale opening + intra-month delta walk. For past months,
-    // fall back to the opening + delta computation.
+    // For the CURRENT month, the backend ships balance_rub computed at the
+    // latest snapshot's OWN date (per-date FX) — use it directly to keep
+    // hero balance and account cards in sync. For past months or when the
+    // backend didn't supply balance_rub, fall back to opening + delta walk.
     const latest = _LATEST_SNAPSHOTS[a.id];
     let rubBal;
     let latestAsOf = null;
-    if (_IS_CURRENT_MONTH && latest && typeof latest.actual_balance === 'number') {
+    if (_IS_CURRENT_MONTH && typeof a.balance_rub === 'number') {
+      rubBal = a.balance_rub;
+      latestAsOf = a.balance_as_of || (latest && latest.as_of) || null;
+    } else if (_IS_CURRENT_MONTH && latest && typeof latest.actual_balance === 'number') {
+      // Backwards-compat: backend without balance_rub field. Drift bug applies.
       rubBal = toRub(latest.actual_balance, a.currency);
       latestAsOf = latest.as_of || null;
     } else {
