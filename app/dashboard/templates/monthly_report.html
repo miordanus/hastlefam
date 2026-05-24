@@ -1695,25 +1695,32 @@ function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.h-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-view').forEach(v => v.classList.toggle('active', v.id === `tab-${tab}`));
+  // Persist tab in URL so reloads / period nav land on the same tab.
+  const url = new URL(location.href);
+  if (tab === 'monthly') url.searchParams.delete('tab');
+  else url.searchParams.set('tab', tab);
+  history.replaceState(null, '', url.toString());
   renderActiveTab();
 }
 
 function navPeriod(delta) {
   let y = _REPORT_YEAR, m = _REPORT_MONTH;
-  if (activeTab === 'monthly') {
+  const params = new URLSearchParams(location.search);
+  // Carry active tab unless we're on the default (monthly).
+  if (activeTab && activeTab !== 'monthly') params.set('tab', activeTab);
+
+  if (activeTab === 'monthly' || activeTab === 'cashflow') {
     m += delta;
   } else if (activeTab === 'quarterly') {
     m += delta * 3;
   } else {
-    // year / annual
-    const params = new URLSearchParams(location.search);
-    params.set('month', `${y+delta}-01`);
+    // year / annual: shift by full year, anchor to Jan
+    params.set('month', `${y + delta}-01`);
     location.search = params.toString();
     return;
   }
   while (m < 1)  { m += 12; y--; }
   while (m > 12) { m -= 12; y++; }
-  const params = new URLSearchParams(location.search);
   params.set('month', `${y}-${String(m).padStart(2,'0')}`);
   location.search = params.toString();
 }
@@ -1737,6 +1744,15 @@ document.getElementById('view-toggle').querySelectorAll('.filter-btn').forEach(b
 });
 document.getElementById('filter-account').addEventListener('change', e => { currentFilter.account = e.target.value; renderLedger(); });
 document.getElementById('filter-status').addEventListener('change', e => { currentFilter.status = e.target.value; renderLedger(); });
+
+// Initial tab from URL (?tab=) — default monthly.
+const _initialTab = (new URLSearchParams(location.search)).get('tab');
+if (_initialTab && document.getElementById(`tab-${_initialTab}`)) {
+  // Mirror what switchTab does, but without rewriting the URL (already there).
+  activeTab = _initialTab;
+  document.querySelectorAll('.h-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === _initialTab));
+  document.querySelectorAll('.tab-view').forEach(v => v.classList.toggle('active', v.id === `tab-${_initialTab}`));
+}
 
 renderLedgerFilters();
 renderActiveTab();
