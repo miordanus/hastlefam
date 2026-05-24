@@ -242,3 +242,27 @@ def update_correction(
         url=f"/finance/corrections?household_id={household_id}&uncategorized={str(uncategorized).lower()}",
         status_code=303,
     )
+
+
+@router.get("/category_movers")
+def category_movers(
+    household_id: str = Query(...),
+    from_:     str = Query(..., alias="from",      description="YYYY-MM, current period start"),
+    to_:       str = Query(..., alias="to",        description="YYYY-MM, current period end"),
+    prev_from: str = Query(..., alias="prev_from", description="YYYY-MM, prior period start"),
+    prev_to:   str = Query(..., alias="prev_to",   description="YYYY-MM, prior period end"),
+) -> dict:
+    """Top expense-category movers across two adjacent periods (REST-only)."""
+    if not _use_rest():
+        raise HTTPException(status_code=503, detail="Supabase REST not configured")
+    for ym in (from_, to_, prev_from, prev_to):
+        try:
+            y, m = [int(x) for x in ym.split("-")]
+            if not (1 <= m <= 12):
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=422, detail="period bounds must be YYYY-MM")
+    return FinanceService(None).category_movers_via_rest(
+        household_id, from_, to_, prev_from, prev_to
+    )
+
