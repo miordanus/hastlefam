@@ -7,24 +7,24 @@ from app.domain.enums import Currency, TransactionDirection
 from app.infrastructure.db.models import (
     Account,
     BalanceSnapshot,
-    Owner,
     RawImportTransaction,
     Transaction,
+    User,
 )
-from tests.conftest import ACCOUNT_ID, HOUSEHOLD_ID, OWNER_ID
+from tests.conftest import ACCOUNT_ID, HOUSEHOLD_ID, USER_ID
 
 
 def _now():
     return datetime.now(timezone.utc)
 
 
-def _add_tx(db, *, primary_tag=None, days_ago=0, owner_id=None,
+def _add_tx(db, *, primary_tag=None, days_ago=0, user_id=None,
             direction=TransactionDirection.EXPENSE, is_planned=False,
             is_internal_transfer=False):
     tx = Transaction(
         id=uuid.uuid4(),
         household_id=HOUSEHOLD_ID,
-        owner_id=owner_id,
+        user_id=user_id,
         direction=direction,
         amount=Decimal("10"),
         currency=Currency.USD,
@@ -42,11 +42,11 @@ def _add_tx(db, *, primary_tag=None, days_ago=0, owner_id=None,
     return tx
 
 
-def _add_account(db, *, name="Acct", owner_id=None, is_active=True):
+def _add_account(db, *, name="Acct", owner_user_id=None, is_active=True):
     acct = Account(
         id=uuid.uuid4(),
         household_id=HOUSEHOLD_ID,
-        owner_id=owner_id,
+        owner_user_id=owner_user_id,
         name=name,
         currency=Currency.USD,
         is_active=is_active,
@@ -175,20 +175,29 @@ def test_import_freshness_per_source(seeded_db):
 # ─── Per-person split ──────────────────────────────────────────────────────
 
 def test_per_person_assignment(seeded_db):
-    other = Owner(id=uuid.uuid4(), household_id=HOUSEHOLD_ID, name="Wife", slug="wife")
-    seeded_db.add(other)
+    wife = User(id=uuid.uuid4(), household_id=HOUSEHOLD_ID, telegram_id="999", name="Wife")
+    seeded_db.add(wife)
     seeded_db.commit()
 
-    _add_tx(seeded_db, primary_tag=None, owner_id=OWNER_ID, days_ago=1)
-    _add_tx(seeded_db, primary_tag=None, owner_id=other.id, days_ago=1)
-    _add_tx(seeded_db, primary_tag=None, owner_id=None, days_ago=1)  # shared
+    _add_tx(seeded_db, primary_tag=None, user_id=USER_ID, days_ago=1)
+    _add_tx(seeded_db, primary_tag=None, user_id=wife.id, days_ago=1)
+    _add_tx(seeded_db, primary_tag=None, user_id=None, days_ago=1)  # shared
 
-    out = FinanceService(seeded_db).data_health(str(HOUSEHOLD_ID))
+    out = FinanceService(seeded_db).data_health(str(HOUSEHOLD_ID), current_user_id=str(USER_ID))
     people = {p["name"]: p for p in out["people"]}
-    assert len(people["Test Owner"]["todos"]) == 1
+    assert len(people["Test User"]["todos"]) == 1
     assert len(people["Wife"]["todos"]) == 1
     shared_uncat = [t for t in out["unassigned"] if t["kind"] == "uncategorized"]
     assert len(shared_uncat) == 1
+
+
+def test_per_person_personalization_and_balance_routing(seeded_db):
+    # logged-in user is flagged is_you and sorted first
+    _add_account(seeded_db, name="Max card", owner_user_id=USER_ID)  # never verified -> red -> routed
+    out = FinanceService(seeded_db).data_health(str(HOUSEHOLD_ID), current_user_id=str(USER_ID))
+    assert out["people"][0]["is_you"] is True
+    me = next(p for p in out["people"] if p["is_you"])
+    assert any(t["kind"] == "balance" and "Max card" in t["label"] for t in me["todos"])
 
 
 # ─── Headline aggregate ────────────────────────────────────────────────────
@@ -215,7 +224,7 @@ client.cookies.set("hf_session", "x")
 def test_health_data_endpoint_returns_json(monkeypatch):
     monkeypatch.setattr(app_main, "verify_session", lambda t: {"uid": "u", "hid": "h"})
 
-    def fake(self, household_id):
+    def fake(self, household_id, current_user_id=None):
         return {"attention_count": 0, "generated_at": "2026-05-28T00:00:00+00:00",
                 "uncategorized": {"count": 0, "oldest_days": None, "status": "green", "items": []},
                 "balances": {"status": "green", "accounts": []},
@@ -233,7 +242,7 @@ def test_health_data_endpoint_returns_json(monkeypatch):
 def test_health_page_renders(monkeypatch):
     monkeypatch.setattr(app_main, "verify_session", lambda t: {"uid": "u", "hid": "h"})
 
-    def fake(self, household_id):
+    def fake(self, household_id, current_user_id=None):
         return {"attention_count": 2, "generated_at": "2026-05-28T00:00:00+00:00",
                 "uncategorized": {"count": 1, "oldest_days": 3, "status": "amber", "items": []},
                 "balances": {"status": "red", "accounts": []},

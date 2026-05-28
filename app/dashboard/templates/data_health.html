@@ -165,7 +165,7 @@ function render(){
     <td class="t-num">${fmtDate(it.occurred_at)}</td>
     <td class="t-name">${esc(it.merchant) || 'операция'}</td>
     <td class="t-num mono">${fmtAmt(it.amount,it.currency)}</td>
-    <td class="t-num">${esc(it.owner_name)||'—'}</td>
+    <td class="t-num">${esc(it.user_name)||'—'}</td>
   </tr>`).join('');
   const uPanel = `<div class="panel"><div class="panel-head">Операции без категории
       ${u.count?`<a class="cta" style="margin-left:auto" href="${correctionsUrl}">Разобрать (${u.count}) →</a>`:''}</div>
@@ -173,11 +173,12 @@ function render(){
       ${u.count>(u.items||[]).length?`<a class="alerts-more cta" style="display:block;padding:10px;text-align:center" href="${correctionsUrl}">Ещё ${u.count-(u.items||[]).length} →</a>`:''}`
       : '<div class="panel-empty">Всё разобрано по категориям 🎉</div>'}</div>`;
 
-  // Per-person to-do
-  const cols = [...(D.people||[]).map(p=>({name:p.name,todos:p.todos})), {name:'Общие', todos:D.unassigned||[]}];
+  // Per-person to-do — logged-in user first (is_you), then partner(s), then shared
+  const cols = [...(D.people||[]).map(p=>({title: p.is_you ? `Ты${p.name?` · ${p.name}`:''}` : p.name, you:!!p.is_you, todos:p.todos})),
+                {title:'Общие', you:false, todos:D.unassigned||[]}];
   const kindLabel = k => k==='uncategorized'?'категория':k==='balance'?'баланс':k;
-  const peopleHtml = `<div class="people">` + cols.map(p => `<div class="person">
-    <div class="person-head"><span class="person-name">${esc(p.name)}</span><span class="person-count">${p.todos.length}</span></div>
+  const peopleHtml = `<div class="people">` + cols.map(p => `<div class="person"${p.you?' style="border-color:var(--accent)"':''}>
+    <div class="person-head"><span class="person-name">${esc(p.title)}</span><span class="person-count">${p.todos.length}</span></div>
     ${p.todos.length ? p.todos.slice(0,20).map(t=>`<div class="todo"><span class="todo-kind">${kindLabel(t.kind)}</span><span class="todo-label">${esc(t.label)}</span></div>`).join('')
       : '<div class="person-done">✓ ничего не ждёт</div>'}
   </div>`).join('') + `</div>`;

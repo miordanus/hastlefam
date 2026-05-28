@@ -16,10 +16,10 @@ from app.domain.enums import Currency, TransactionDirection
 from app.infrastructure.db.models import (
     Account,
     BalanceSnapshot,
-    Owner,
     PlannedPayment,
     RawImportTransaction,
     Transaction,
+    User,
 )
 
 
@@ -1409,11 +1409,14 @@ class FinanceService:
 
     # ─── Data-health home page ─────────────────────────────────────────────
 
-    def data_health(self, household_id: str) -> dict[str, Any]:
+    def data_health(self, household_id: str, current_user_id: str | None = None) -> dict[str, Any]:
         """How complete and fresh the household's finance data is, plus a
-        per-person to-do split. Read-only visibility surface — see the data
-        health home page. Mirror any change in data_health_via_rest()."""
+        per-person to-do split keyed on `users` (transactions carry `user_id`;
+        accounts carry `owner_user_id`). `current_user_id` (the logged-in
+        session uid) is flagged `is_you` so the page can personalise.
+        Read-only visibility surface. Mirror any change in data_health_via_rest()."""
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        cur_uid = _uuid.UUID(current_user_id) if current_user_id else None
         now = datetime.now(timezone.utc)
 
         def _age_days(dt: datetime | None) -> int | None:
@@ -1422,6 +1425,22 @@ class FinanceService:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return (now - dt).days
+
+        user_names = {
+            u.id: u.name
+            for u in self.db.query(User).filter(
+                User.household_id == hid, User.is_active == True  # noqa: E712
+            ).all()
+        }
+        people = {uid: {"user_id": str(uid), "name": name, "is_you": uid == cur_uid, "todos": []}
+                  for uid, name in user_names.items()}
+        unassigned: list[dict[str, Any]] = []
+
+        def _route(uid, todo):
+            if uid and uid in people:
+                people[uid]["todos"].append(todo)
+            else:
+                unassigned.append(todo)
 
         # ── Uncategorized (primary_tag is what categorization actually writes)
         uncat_rows = (
@@ -1436,12 +1455,6 @@ class FinanceService:
             .order_by(Transaction.occurred_at.asc())
             .all()
         )
-        owner_names = {
-            o.id: o.name
-            for o in self.db.query(Owner).filter(
-                Owner.household_id == hid, Owner.is_active == True  # noqa: E712
-            ).all()
-        }
         uncat_items = [
             {
                 "id": str(tx.id),
@@ -1449,14 +1462,20 @@ class FinanceService:
                 "amount": float(tx.amount),
                 "currency": (tx.currency.value if hasattr(tx.currency, "value") else tx.currency),
                 "merchant": tx.merchant_raw or "",
-                "owner_id": str(tx.owner_id) if tx.owner_id else None,
-                "owner_name": owner_names.get(tx.owner_id),
+                "user_id": str(tx.user_id) if tx.user_id else None,
+                "user_name": user_names.get(tx.user_id),
             }
             for tx in uncat_rows[:UNCAT_ITEM_CAP]
         ]
         uncat_count = len(uncat_rows)
         oldest_days = _age_days(uncat_rows[0].occurred_at) if uncat_rows else None
         uncat_status = _signal_uncat_status(uncat_count, oldest_days)
+        for tx in uncat_rows:
+            _route(tx.user_id, {
+                "kind": "uncategorized",
+                "label": f"{tx.merchant_raw or 'операция'} — {float(tx.amount):g} {(tx.currency.value if hasattr(tx.currency, 'value') else tx.currency)}",
+                "ref": str(tx.id),
+            })
 
         # ── Stale balances (latest snapshot per active account)
         accounts = (
@@ -1483,9 +1502,15 @@ class FinanceService:
                 "last_verified_at": latest.created_at.isoformat() if latest else None,
                 "age_days": age,
                 "status": status,
-                "owner_id": str(acct.owner_id) if acct.owner_id else None,
-                "owner_name": owner_names.get(acct.owner_id),
+                "user_id": str(acct.owner_user_id) if acct.owner_user_id else None,
+                "user_name": user_names.get(acct.owner_user_id),
             })
+            if status in ("amber", "red"):
+                _route(acct.owner_user_id, {
+                    "kind": "balance",
+                    "label": f"Сверить баланс: {acct.name}",
+                    "ref": str(acct.id),
+                })
         bal_status = _worst([a["status"] for a in bal_accounts])
 
         # ── Import freshness (latest imported_at per source_name)
@@ -1517,31 +1542,6 @@ class FinanceService:
         )
         last_activity_at = last_activity[0].isoformat() if last_activity and last_activity[0] else None
 
-        # ── Per-person to-do split
-        people = {oid: {"owner_id": str(oid), "name": name, "todos": []}
-                  for oid, name in owner_names.items()}
-        unassigned: list[dict[str, Any]] = []
-
-        def _route(owner_id, todo):
-            if owner_id and owner_id in people:
-                people[owner_id]["todos"].append(todo)
-            else:
-                unassigned.append(todo)
-
-        for tx in uncat_rows:
-            _route(tx.owner_id, {
-                "kind": "uncategorized",
-                "label": f"{tx.merchant_raw or 'операция'} — {float(tx.amount):g} {(tx.currency.value if hasattr(tx.currency, 'value') else tx.currency)}",
-                "ref": str(tx.id),
-            })
-        for acct in bal_accounts:
-            if acct["status"] in ("amber", "red"):
-                _route(_uuid.UUID(acct["owner_id"]) if acct["owner_id"] else None, {
-                    "kind": "balance",
-                    "label": f"Сверить баланс: {acct['name']}",
-                    "ref": acct["account_id"],
-                })
-
         attention_count = (
             uncat_count
             + sum(1 for a in bal_accounts if a["status"] in ("amber", "red"))
@@ -1563,11 +1563,11 @@ class FinanceService:
                 "sources": sources,
                 "last_activity_at": last_activity_at,
             },
-            "people": list(people.values()),
+            "people": sorted(people.values(), key=lambda p: not p["is_you"]),
             "unassigned": unassigned,
         }
 
-    def data_health_via_rest(self, household_id: str) -> dict[str, Any]:
+    def data_health_via_rest(self, household_id: str, current_user_id: str | None = None) -> dict[str, Any]:
         """REST-API variant of data_health(). Talks to PostgREST via
         SupabaseClient instead of opening a Postgres socket. Same return shape.
         Keep structurally in sync with data_health()."""
@@ -1589,13 +1589,13 @@ class FinanceService:
             return (now - dt).days
 
         with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
-            owners = sb.get("owners", {
+            users = sb.get("users", {
                 "select": "id,name",
                 "household_id": f"eq.{household_id}",
                 "is_active": "eq.true",
             })
             uncat = sb.get("transactions", {
-                "select": "id,occurred_at,amount,currency,merchant_raw,owner_id",
+                "select": "id,occurred_at,amount,currency,merchant_raw,user_id",
                 "household_id": f"eq.{household_id}",
                 "primary_tag": "is.null",
                 "is_planned": "eq.false",
@@ -1604,7 +1604,7 @@ class FinanceService:
                 "order": "occurred_at.asc",
             })
             accounts = sb.get("accounts", {
-                "select": "id,name,currency,owner_id",
+                "select": "id,name,currency,owner_user_id",
                 "household_id": f"eq.{household_id}",
                 "is_active": "eq.true",
                 "order": "name.asc",
@@ -1629,7 +1629,7 @@ class FinanceService:
                 "limit": "1",
             })
 
-        owner_names = {o["id"]: o["name"] for o in owners}
+        user_names = {u["id"]: u["name"] for u in users}
 
         uncat_items = [
             {
@@ -1638,8 +1638,8 @@ class FinanceService:
                 "amount": float(tx["amount"]),
                 "currency": tx.get("currency") or "rub",
                 "merchant": tx.get("merchant_raw") or "",
-                "owner_id": tx.get("owner_id"),
-                "owner_name": owner_names.get(tx.get("owner_id")),
+                "user_id": tx.get("user_id"),
+                "user_name": user_names.get(tx.get("user_id")),
             }
             for tx in uncat[:UNCAT_ITEM_CAP]
         ]
@@ -1663,8 +1663,8 @@ class FinanceService:
                 "last_verified_at": snap["created_at"] if snap else None,
                 "age_days": age,
                 "status": _status_from_age(age, BAL_WARN_D, BAL_ERR_D),
-                "owner_id": a.get("owner_id"),
-                "owner_name": owner_names.get(a.get("owner_id")),
+                "user_id": a.get("owner_user_id"),
+                "user_name": user_names.get(a.get("owner_user_id")),
             })
         bal_status = _worst([a["status"] for a in bal_accounts])
 
@@ -1684,25 +1684,26 @@ class FinanceService:
         import_status = _worst([s["status"] for s in sources])
         last_activity_at = last_act_rows[0]["created_at"] if last_act_rows else None
 
-        people = {oid: {"owner_id": oid, "name": name, "todos": []}
-                  for oid, name in owner_names.items()}
+        cur_uid = str(current_user_id) if current_user_id else None
+        people = {uid: {"user_id": uid, "name": name, "is_you": uid == cur_uid, "todos": []}
+                  for uid, name in user_names.items()}
         unassigned = []
 
-        def _route(owner_id, todo):
-            if owner_id and owner_id in people:
-                people[owner_id]["todos"].append(todo)
+        def _route(uid, todo):
+            if uid and uid in people:
+                people[uid]["todos"].append(todo)
             else:
                 unassigned.append(todo)
 
         for tx in uncat:
-            _route(tx.get("owner_id"), {
+            _route(tx.get("user_id"), {
                 "kind": "uncategorized",
                 "label": f"{tx.get('merchant_raw') or 'операция'} — {float(tx['amount']):g} {tx.get('currency') or 'rub'}",
                 "ref": tx["id"],
             })
         for acct in bal_accounts:
             if acct["status"] in ("amber", "red"):
-                _route(acct["owner_id"], {
+                _route(acct["user_id"], {
                     "kind": "balance",
                     "label": f"Сверить баланс: {acct['name']}",
                     "ref": acct["account_id"],
@@ -1729,7 +1730,7 @@ class FinanceService:
                 "sources": sources,
                 "last_activity_at": last_activity_at,
             },
-            "people": list(people.values()),
+            "people": sorted(people.values(), key=lambda p: not p["is_you"]),
             "unassigned": unassigned,
         }
 

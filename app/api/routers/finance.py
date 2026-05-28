@@ -32,10 +32,10 @@ def _run_cashflow(db: Session, household_id: str, sd, ed) -> dict:
     return FinanceService(db).cashflow_monthly(household_id, sd, ed)
 
 
-def _run_data_health(db: Session, household_id: str) -> dict:
+def _run_data_health(db: Session, household_id: str, current_user_id: str | None = None) -> dict:
     if _use_rest():
-        return FinanceService(None).data_health_via_rest(household_id)
-    return FinanceService(db).data_health(household_id)
+        return FinanceService(None).data_health_via_rest(household_id, current_user_id)
+    return FinanceService(db).data_health(household_id, current_user_id)
 
 router = APIRouter(prefix="/finance", tags=["finance"])
 
@@ -157,7 +157,8 @@ def health_page(
     """Data-health home page (authed landing). Shows data completeness +
     freshness + a per-person to-do split."""
     hid = household_id or getattr(request.state, "household_id", None)
-    health_data = _run_data_health(db, hid) if hid else None
+    uid = getattr(request.state, "user_id", None)
+    health_data = _run_data_health(db, hid, uid) if hid else None
     return templates.TemplateResponse(
         request,
         "data_health.html",
@@ -167,11 +168,12 @@ def health_page(
 
 @router.get("/health/data")
 def health_data(
+    request: Request,
     household_id: str = Query(...),
     db: Session = Depends(get_db),
 ) -> dict:
     """JSON endpoint — same payload the data-health page renders."""
-    return _run_data_health(db, household_id)
+    return _run_data_health(db, household_id, getattr(request.state, "user_id", None))
 
 
 @router.get("/cashflow")
