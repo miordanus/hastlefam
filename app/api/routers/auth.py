@@ -139,7 +139,7 @@ def telegram_callback(request: Request, db: Session = Depends(get_db)) -> Respon
 
     token = sign_session(user_id, household_id)
     secure = request.url.scheme == "https"
-    resp = RedirectResponse(url=f"/finance/report?household_id={household_id}", status_code=302)
+    resp = RedirectResponse(url=f"/finance/health?household_id={household_id}", status_code=302)
     resp.set_cookie(
         SESSION_COOKIE,
         token,
@@ -167,7 +167,7 @@ def bot_magic_link(t: str, request: Request) -> Response:
 
     session_token = sign_session(str(uid), str(hid))
     secure = request.url.scheme == "https"
-    resp = RedirectResponse(url=f"/finance/report?household_id={hid}", status_code=302)
+    resp = RedirectResponse(url=f"/finance/health?household_id={hid}", status_code=302)
     resp.set_cookie(
         SESSION_COOKIE,
         session_token,

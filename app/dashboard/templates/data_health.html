@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HastleFam — Состояние данных</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+:root {
+  --bg:#09090b; --surface:#141417; --surface2:#1a1a1f; --border:#27272a; --border2:#3f3f46;
+  --text:#e4e4e7; --muted:#71717a; --subtle:#52525b; --accent:#6366f1;
+  --green:#22c55e; --red:#ef4444; --yellow:#f59e0b; --radius:10px;
+}
+body { background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif; font-size:14px; line-height:1.5; min-height:100dvh; -webkit-font-smoothing:antialiased; }
+.mono { font-family:'JetBrains Mono','Fira Code',monospace; font-variant-numeric:tabular-nums; }
+a { color:inherit; text-decoration:none; }
+
+.h-root { position:sticky; top:0; z-index:50; background:rgba(9,9,11,0.92); backdrop-filter:blur(12px); border-bottom:1px solid #1f1f23; }
+.h-inner { max-width:1120px; margin:0 auto; padding:0 20px; height:52px; display:flex; align-items:center; gap:12px; }
+.h-brand { display:flex; align-items:center; gap:8px; }
+.h-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); }
+.h-name { font-size:14px; font-weight:600; letter-spacing:0.03em; color:#fff; }
+.h-right { margin-left:auto; display:flex; align-items:center; gap:14px; }
+.h-meta { font-size:12px; color:var(--subtle); }
+.h-link { font-size:12px; color:var(--muted); }
+.h-link:hover { color:var(--text); }
+
+.container { max-width:1120px; margin:0 auto; padding:24px 20px 64px; display:flex; flex-direction:column; gap:18px; }
+
+.hero { background:linear-gradient(135deg,#141417 0%,#18181e 100%); border:1px solid var(--border); border-radius:14px; padding:26px 30px; }
+.hero-label { font-size:12px; font-weight:500; color:var(--muted); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:10px; }
+.hero-row { display:flex; align-items:baseline; gap:14px; }
+.hero-num { font-size:50px; font-weight:600; letter-spacing:-0.02em; line-height:1; }
+.hero-cap { font-size:15px; color:#a1a1aa; }
+.hero-num.ok { color:var(--green); }
+
+.cards { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+.card-head { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+.card-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.card-label { font-size:12px; color:var(--muted); font-weight:500; text-transform:uppercase; letter-spacing:0.06em; }
+.card-num { font-size:30px; font-weight:600; letter-spacing:-0.01em; }
+.card-sub { font-size:12px; color:var(--subtle); margin-top:6px; min-height:16px; }
+
+.dot-green { background:var(--green); } .dot-amber { background:var(--yellow); } .dot-red { background:var(--red); }
+.txt-green { color:var(--green); } .txt-amber { color:var(--yellow); } .txt-red { color:var(--red); }
+
+.panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+.panel-head { padding:13px 18px; border-bottom:1px solid #1f1f23; font-size:13px; font-weight:600; color:#a1a1aa; display:flex; align-items:center; gap:8px; }
+.panel-empty { padding:18px; font-size:13px; color:var(--subtle); }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-size:11px; color:var(--subtle); font-weight:500; text-transform:uppercase; letter-spacing:0.05em; padding:9px 18px; border-bottom:1px solid #1f1f23; }
+td { padding:11px 18px; font-size:13px; border-bottom:1px solid var(--surface2); }
+tr:last-child td { border-bottom:none; }
+.t-name { color:var(--text); }
+.t-num { color:#a1a1aa; }
+.badge { display:inline-flex; align-items:center; gap:6px; font-size:12px; }
+
+.cta { font-size:12px; color:var(--accent); }
+.cta:hover { text-decoration:underline; }
+
+.people { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.person { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+.person-head { padding:12px 16px; border-bottom:1px solid #1f1f23; display:flex; align-items:center; justify-content:space-between; }
+.person-name { font-size:14px; font-weight:600; }
+.person-count { font-size:12px; color:var(--subtle); }
+.todo { padding:10px 16px; font-size:13px; border-bottom:1px solid var(--surface2); display:flex; gap:8px; align-items:center; }
+.todo:last-child { border-bottom:none; }
+.todo-kind { font-size:10px; text-transform:uppercase; letter-spacing:0.05em; color:var(--subtle); border:1px solid var(--border2); border-radius:4px; padding:1px 5px; flex-shrink:0; }
+.todo-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.person-done { padding:14px 16px; font-size:13px; color:var(--green); }
+
+@media (max-width:760px){ .cards,.people { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="h-root"><div class="h-inner">
+  <div class="h-brand"><span class="h-dot"></span><span class="h-name">HastleFam</span></div>
+  <div class="h-right">
+    <span class="h-meta" id="updated">—</span>
+    <a class="h-link" href="/finance/report?household_id={{ household_id or '' }}">Отчёт →</a>
+    <a class="h-link" href="/auth/logout">Выйти</a>
+  </div>
+</div></div>
+
+<div class="container" id="root">
+  <div class="panel-empty">Загрузка…</div>
+</div>
+
+<script type="application/json" id="health-data">{{ health_data | tojson }}</script>
+<script type="application/json" id="hid-data">{{ (household_id or '') | tojson }}</script>
+<script>
+const D = (() => { try { return JSON.parse(document.getElementById('health-data').textContent || 'null'); } catch(e){ return null; } })();
+const HID = (() => { try { return JSON.parse(document.getElementById('hid-data').textContent || '""'); } catch(e){ return ''; } })();
+
+function plural(n, one, few, many){
+  const m100=n%100, m10=n%10;
+  if(m100>=11&&m100<=14) return many;
+  if(m10===1) return one;
+  if(m10>=2&&m10<=4) return few;
+  return many;
+}
+const days = n => n==null ? '—' : n===0 ? 'сегодня' : `${n} ${plural(n,'день','дня','дней')} назад`;
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtAmt = (a,c) => `${Number(a).toLocaleString('ru-RU')} ${String(c||'').toUpperCase()}`;
+const fmtDate = iso => { if(!iso) return '—'; try { return new Date(iso).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'}); } catch(e){ return '—'; } };
+const statusDot = s => `<span class="card-dot dot-${s}"></span>`;
+
+function render(){
+  const root = document.getElementById('root');
+  if(!D){ root.innerHTML = '<div class="panel-empty">Нет household_id — данные не загружены.</div>'; return; }
+
+  document.getElementById('updated').textContent = 'обновлено ' + fmtDate(D.generated_at);
+
+  const ac = D.attention_count || 0;
+  const hero = ac === 0
+    ? `<div class="hero-row"><span class="hero-num ok">✓</span><span class="hero-cap">Всё разобрано — данные в порядке</span></div>`
+    : `<div class="hero-row"><span class="hero-num">${ac}</span><span class="hero-cap">${plural(ac,'пункт требует','пункта требуют','пунктов требуют')} внимания</span></div>`;
+
+  // Signal cards
+  const u = D.uncategorized, b = D.balances, im = D.imports;
+  const uSub = u.count ? (u.oldest_days!=null ? `самая старая — ${days(u.oldest_days)}` : '') : 'всё с категориями';
+  const bWorst = (b.accounts||[]).filter(a=>a.status!=='green').sort((x,y)=>(y.age_days??1e9)-(x.age_days??1e9))[0];
+  const bSub = bWorst ? `${esc(bWorst.name)}: ${bWorst.age_days==null?'ни разу не сверяли':days(bWorst.age_days)}` : 'все балансы свежие';
+  const iWorst = (im.sources||[]).filter(s=>s.status!=='green').sort((x,y)=>(y.age_days??0)-(x.age_days??0))[0];
+  const iSub = iWorst ? `${esc(iWorst.source_name)}: ${days(iWorst.age_days)}` : ((im.sources||[]).length ? 'импорт свежий' : 'нет источников');
+
+  const cards = `<div class="cards">
+    <div class="card"><div class="card-head">${statusDot(u.status)}<span class="card-label">Без категории</span></div>
+      <div class="card-num txt-${u.status}">${u.count}</div><div class="card-sub">${uSub}</div></div>
+    <div class="card"><div class="card-head">${statusDot(b.status)}<span class="card-label">Сверка баланса</span></div>
+      <div class="card-num txt-${b.status}">${(b.accounts||[]).filter(a=>a.status!=='green').length}</div><div class="card-sub">${bSub}</div></div>
+    <div class="card"><div class="card-head">${statusDot(im.status)}<span class="card-label">Свежесть импорта</span></div>
+      <div class="card-num txt-${im.status}">${(im.sources||[]).filter(s=>s.status!=='green').length}</div><div class="card-sub">${iSub}</div></div>
+  </div>`;
+
+  // Accounts table
+  const accRows = (b.accounts||[]).map(a => `<tr>
+    <td class="t-name">${esc(a.name)}</td>
+    <td class="t-num mono">${a.last_balance!=null?fmtAmt(a.last_balance,a.currency):'—'}</td>
+    <td class="t-num">${a.age_days==null?'ни разу':days(a.age_days)}</td>
+    <td><span class="badge txt-${a.status}">${statusDot(a.status)}${a.status==='green'?'свежий':a.status==='amber'?'пора сверить':'устарел'}</span></td>
+  </tr>`).join('');
+  const accPanel = `<div class="panel"><div class="panel-head">Счета и сверка баланса</div>
+    ${(b.accounts||[]).length ? `<table><thead><tr><th>Счёт</th><th>Последний баланс</th><th>Сверяли</th><th>Статус</th></tr></thead><tbody>${accRows}</tbody></table>`
+      : '<div class="panel-empty">Нет активных счетов.</div>'}</div>`;
+
+  // Sources table
+  const srcRows = (im.sources||[]).map(s => `<tr>
+    <td class="t-name">${esc(s.source_name)}</td>
+    <td class="t-num">${fmtDate(s.last_imported_at)}</td>
+    <td class="t-num">${days(s.age_days)}</td>
+    <td><span class="badge txt-${s.status}">${statusDot(s.status)}${s.status==='green'?'свежий':s.status==='amber'?'давно':'устарел'}</span></td>
+  </tr>`).join('');
+  const srcPanel = `<div class="panel"><div class="panel-head">Источники импорта</div>
+    ${(im.sources||[]).length ? `<table><thead><tr><th>Источник</th><th>Последний импорт</th><th>Давность</th><th>Статус</th></tr></thead><tbody>${srcRows}</tbody></table>`
+      : '<div class="panel-empty">Импортов пока не было.</div>'}</div>`;
+
+  // Uncategorized list
+  const correctionsUrl = `/finance/corrections?household_id=${encodeURIComponent(HID)}&uncategorized=true`;
+  const uItems = (u.items||[]).map(it => `<tr>
+    <td class="t-num">${fmtDate(it.occurred_at)}</td>
+    <td class="t-name">${esc(it.merchant) || 'операция'}</td>
+    <td class="t-num mono">${fmtAmt(it.amount,it.currency)}</td>
+    <td class="t-num">${esc(it.owner_name)||'—'}</td>
+  </tr>`).join('');
+  const uPanel = `<div class="panel"><div class="panel-head">Операции без категории
+      ${u.count?`<a class="cta" style="margin-left:auto" href="${correctionsUrl}">Разобрать (${u.count}) →</a>`:''}</div>
+    ${(u.items||[]).length ? `<table><thead><tr><th>Дата</th><th>Где</th><th>Сумма</th><th>Чьё</th></tr></thead><tbody>${uItems}</tbody></table>
+      ${u.count>(u.items||[]).length?`<a class="alerts-more cta" style="display:block;padding:10px;text-align:center" href="${correctionsUrl}">Ещё ${u.count-(u.items||[]).length} →</a>`:''}`
+      : '<div class="panel-empty">Всё разобрано по категориям 🎉</div>'}</div>`;
+
+  // Per-person to-do
+  const cols = [...(D.people||[]).map(p=>({name:p.name,todos:p.todos})), {name:'Общие', todos:D.unassigned||[]}];
+  const kindLabel = k => k==='uncategorized'?'категория':k==='balance'?'баланс':k;
+  const peopleHtml = `<div class="people">` + cols.map(p => `<div class="person">
+    <div class="person-head"><span class="person-name">${esc(p.name)}</span><span class="person-count">${p.todos.length}</span></div>
+    ${p.todos.length ? p.todos.slice(0,20).map(t=>`<div class="todo"><span class="todo-kind">${kindLabel(t.kind)}</span><span class="todo-label">${esc(t.label)}</span></div>`).join('')
+      : '<div class="person-done">✓ ничего не ждёт</div>'}
+  </div>`).join('') + `</div>`;
+
+  root.innerHTML = `<div class="hero"><div class="hero-label">Состояние данных</div>${hero}</div>`
+    + cards + accPanel + srcPanel + uPanel
+    + `<div class="hero-label" style="margin-top:6px">Кому что разобрать</div>` + peopleHtml;
+}
+render();
+</script>
+</body>
+</html>

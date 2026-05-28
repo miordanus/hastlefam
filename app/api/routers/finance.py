@@ -31,6 +31,12 @@ def _run_cashflow(db: Session, household_id: str, sd, ed) -> dict:
         return FinanceService(None).cashflow_monthly_via_rest(household_id, sd, ed)
     return FinanceService(db).cashflow_monthly(household_id, sd, ed)
 
+
+def _run_data_health(db: Session, household_id: str) -> dict:
+    if _use_rest():
+        return FinanceService(None).data_health_via_rest(household_id)
+    return FinanceService(db).data_health(household_id)
+
 router = APIRouter(prefix="/finance", tags=["finance"])
 
 _TEMPLATE_DIR = str(Path(__file__).resolve().parents[2] / "dashboard" / "templates")
@@ -140,6 +146,32 @@ def report_data(
         today = _dt.date.today()
         year, mon = today.year, today.month
     return _run_monthly_report(db, household_id, year, mon)
+
+
+@router.get("/health", response_class=HTMLResponse)
+def health_page(
+    request: Request,
+    household_id: str = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Data-health home page (authed landing). Shows data completeness +
+    freshness + a per-person to-do split."""
+    hid = household_id or getattr(request.state, "household_id", None)
+    health_data = _run_data_health(db, hid) if hid else None
+    return templates.TemplateResponse(
+        request,
+        "data_health.html",
+        {"health_data": health_data, "household_id": hid},
+    )
+
+
+@router.get("/health/data")
+def health_data(
+    household_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """JSON endpoint — same payload the data-health page renders."""
+    return _run_data_health(db, household_id)
 
 
 @router.get("/cashflow")

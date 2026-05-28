@@ -13,7 +13,50 @@ from sqlalchemy.orm import Session
 # Смешивать нельзя нигде. Проверяй каждый новый запрос.
 
 from app.domain.enums import Currency, TransactionDirection
-from app.infrastructure.db.models import Account, BalanceSnapshot, PlannedPayment, Transaction
+from app.infrastructure.db.models import (
+    Account,
+    BalanceSnapshot,
+    Owner,
+    PlannedPayment,
+    RawImportTransaction,
+    Transaction,
+)
+
+
+# Data-health thresholds — tune here.
+BAL_WARN_D = 7      # balance not verified for ≥ this many days → amber
+BAL_ERR_D = 14      # → red (and "never verified" is always red)
+IMPORT_WARN_D = 3   # no import from a source for ≥ this many days → amber
+IMPORT_ERR_D = 7    # → red
+UNCAT_RED_COUNT = 10  # more uncategorized than this → red
+UNCAT_RED_AGE_D = 14  # oldest uncategorized older than this → red
+UNCAT_ITEM_CAP = 50   # cap the inline list shown on the page
+
+
+def _status_from_age(age_days: int | None, warn: int, err: int) -> str:
+    if age_days is None:
+        return "red"  # never recorded
+    if age_days >= err:
+        return "red"
+    if age_days >= warn:
+        return "amber"
+    return "green"
+
+
+def _signal_uncat_status(count: int, oldest_days: int | None) -> str:
+    if count == 0:
+        return "green"
+    if count > UNCAT_RED_COUNT or (oldest_days is not None and oldest_days > UNCAT_RED_AGE_D):
+        return "red"
+    return "amber"
+
+
+def _worst(statuses: list[str]) -> str:
+    if "red" in statuses:
+        return "red"
+    if "amber" in statuses:
+        return "amber"
+    return "green"
 
 
 class FinanceService:
@@ -1363,6 +1406,332 @@ class FinanceService:
     def upcoming_payments(self, household_id: str, days: int = 7, until_date: date | None = None) -> list[dict[str, Any]]:
         """Alias → upcoming_planned() for backward compatibility with API routes."""
         return self.upcoming_planned(household_id, days=days, until_date=until_date)
+
+    # ─── Data-health home page ─────────────────────────────────────────────
+
+    def data_health(self, household_id: str) -> dict[str, Any]:
+        """How complete and fresh the household's finance data is, plus a
+        per-person to-do split. Read-only visibility surface — see the data
+        health home page. Mirror any change in data_health_via_rest()."""
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        now = datetime.now(timezone.utc)
+
+        def _age_days(dt: datetime | None) -> int | None:
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (now - dt).days
+
+        # ── Uncategorized (primary_tag is what categorization actually writes)
+        uncat_rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.primary_tag.is_(None),
+                Transaction.is_planned == False,  # noqa: E712 — ЗАКОН
+                Transaction.is_internal_transfer == False,  # noqa: E712 — ЗАКОН
+                Transaction.direction != TransactionDirection.EXCHANGE,
+            )
+            .order_by(Transaction.occurred_at.asc())
+            .all()
+        )
+        owner_names = {
+            o.id: o.name
+            for o in self.db.query(Owner).filter(
+                Owner.household_id == hid, Owner.is_active == True  # noqa: E712
+            ).all()
+        }
+        uncat_items = [
+            {
+                "id": str(tx.id),
+                "occurred_at": tx.occurred_at.isoformat() if tx.occurred_at else None,
+                "amount": float(tx.amount),
+                "currency": (tx.currency.value if hasattr(tx.currency, "value") else tx.currency),
+                "merchant": tx.merchant_raw or "",
+                "owner_id": str(tx.owner_id) if tx.owner_id else None,
+                "owner_name": owner_names.get(tx.owner_id),
+            }
+            for tx in uncat_rows[:UNCAT_ITEM_CAP]
+        ]
+        uncat_count = len(uncat_rows)
+        oldest_days = _age_days(uncat_rows[0].occurred_at) if uncat_rows else None
+        uncat_status = _signal_uncat_status(uncat_count, oldest_days)
+
+        # ── Stale balances (latest snapshot per active account)
+        accounts = (
+            self.db.query(Account)
+            .filter(Account.household_id == hid, Account.is_active == True)  # noqa: E712
+            .order_by(Account.name.asc())
+            .all()
+        )
+        bal_accounts: list[dict[str, Any]] = []
+        for acct in accounts:
+            latest = (
+                self.db.query(BalanceSnapshot)
+                .filter(BalanceSnapshot.account_id == acct.id)
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            age = _age_days(latest.created_at) if latest else None
+            status = _status_from_age(age, BAL_WARN_D, BAL_ERR_D)
+            bal_accounts.append({
+                "account_id": str(acct.id),
+                "name": acct.name,
+                "currency": (acct.currency.value if hasattr(acct.currency, "value") else acct.currency),
+                "last_balance": float(latest.actual_balance) if latest else None,
+                "last_verified_at": latest.created_at.isoformat() if latest else None,
+                "age_days": age,
+                "status": status,
+                "owner_id": str(acct.owner_id) if acct.owner_id else None,
+                "owner_name": owner_names.get(acct.owner_id),
+            })
+        bal_status = _worst([a["status"] for a in bal_accounts])
+
+        # ── Import freshness (latest imported_at per source_name)
+        raw_rows = (
+            self.db.query(RawImportTransaction)
+            .filter(RawImportTransaction.household_id == hid)
+            .all()
+        )
+        latest_by_source: dict[str, datetime] = {}
+        for r in raw_rows:
+            cur = latest_by_source.get(r.source_name)
+            if cur is None or (r.imported_at and r.imported_at > cur):
+                latest_by_source[r.source_name] = r.imported_at
+        sources: list[dict[str, Any]] = []
+        for name in sorted(latest_by_source):
+            age = _age_days(latest_by_source[name])
+            sources.append({
+                "source_name": name,
+                "last_imported_at": latest_by_source[name].isoformat() if latest_by_source[name] else None,
+                "age_days": age,
+                "status": _status_from_age(age, IMPORT_WARN_D, IMPORT_ERR_D),
+            })
+        import_status = _worst([s["status"] for s in sources])
+        last_activity = (
+            self.db.query(Transaction.created_at)
+            .filter(Transaction.household_id == hid)
+            .order_by(Transaction.created_at.desc())
+            .first()
+        )
+        last_activity_at = last_activity[0].isoformat() if last_activity and last_activity[0] else None
+
+        # ── Per-person to-do split
+        people = {oid: {"owner_id": str(oid), "name": name, "todos": []}
+                  for oid, name in owner_names.items()}
+        unassigned: list[dict[str, Any]] = []
+
+        def _route(owner_id, todo):
+            if owner_id and owner_id in people:
+                people[owner_id]["todos"].append(todo)
+            else:
+                unassigned.append(todo)
+
+        for tx in uncat_rows:
+            _route(tx.owner_id, {
+                "kind": "uncategorized",
+                "label": f"{tx.merchant_raw or 'операция'} — {float(tx.amount):g} {(tx.currency.value if hasattr(tx.currency, 'value') else tx.currency)}",
+                "ref": str(tx.id),
+            })
+        for acct in bal_accounts:
+            if acct["status"] in ("amber", "red"):
+                _route(_uuid.UUID(acct["owner_id"]) if acct["owner_id"] else None, {
+                    "kind": "balance",
+                    "label": f"Сверить баланс: {acct['name']}",
+                    "ref": acct["account_id"],
+                })
+
+        attention_count = (
+            uncat_count
+            + sum(1 for a in bal_accounts if a["status"] in ("amber", "red"))
+            + sum(1 for s in sources if s["status"] in ("amber", "red"))
+        )
+
+        return {
+            "generated_at": now.isoformat(),
+            "attention_count": attention_count,
+            "uncategorized": {
+                "count": uncat_count,
+                "oldest_days": oldest_days,
+                "status": uncat_status,
+                "items": uncat_items,
+            },
+            "balances": {"status": bal_status, "accounts": bal_accounts},
+            "imports": {
+                "status": import_status,
+                "sources": sources,
+                "last_activity_at": last_activity_at,
+            },
+            "people": list(people.values()),
+            "unassigned": unassigned,
+        }
+
+    def data_health_via_rest(self, household_id: str) -> dict[str, Any]:
+        """REST-API variant of data_health(). Talks to PostgREST via
+        SupabaseClient instead of opening a Postgres socket. Same return shape.
+        Keep structurally in sync with data_health()."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        now = datetime.now(timezone.utc)
+
+        def _age_from_iso(iso: str | None) -> int | None:
+            if not iso:
+                return None
+            try:
+                dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (now - dt).days
+
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            owners = sb.get("owners", {
+                "select": "id,name",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+            })
+            uncat = sb.get("transactions", {
+                "select": "id,occurred_at,amount,currency,merchant_raw,owner_id",
+                "household_id": f"eq.{household_id}",
+                "primary_tag": "is.null",
+                "is_planned": "eq.false",
+                "is_internal_transfer": "eq.false",
+                "direction": "neq.exchange",
+                "order": "occurred_at.asc",
+            })
+            accounts = sb.get("accounts", {
+                "select": "id,name,currency,owner_id",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+                "order": "name.asc",
+            })
+            account_ids = [a["id"] for a in accounts]
+            snap_rows = []
+            if account_ids:
+                snap_rows = sb.get("balance_snapshots", {
+                    "select": "account_id,actual_balance,created_at",
+                    "account_id": f"in.({','.join(account_ids)})",
+                    "order": "account_id.asc,created_at.desc",
+                })
+            raw_rows = sb.get("raw_import_transactions", {
+                "select": "source_name,imported_at",
+                "household_id": f"eq.{household_id}",
+                "order": "imported_at.desc",
+            })
+            last_act_rows = sb.get("transactions", {
+                "select": "created_at",
+                "household_id": f"eq.{household_id}",
+                "order": "created_at.desc",
+                "limit": "1",
+            })
+
+        owner_names = {o["id"]: o["name"] for o in owners}
+
+        uncat_items = [
+            {
+                "id": tx["id"],
+                "occurred_at": tx.get("occurred_at"),
+                "amount": float(tx["amount"]),
+                "currency": tx.get("currency") or "rub",
+                "merchant": tx.get("merchant_raw") or "",
+                "owner_id": tx.get("owner_id"),
+                "owner_name": owner_names.get(tx.get("owner_id")),
+            }
+            for tx in uncat[:UNCAT_ITEM_CAP]
+        ]
+        uncat_count = len(uncat)
+        oldest_days = _age_from_iso(uncat[0]["occurred_at"]) if uncat else None
+        uncat_status = _signal_uncat_status(uncat_count, oldest_days)
+
+        latest_snap: dict[str, dict] = {}
+        for r in snap_rows:
+            if r["account_id"] not in latest_snap:
+                latest_snap[r["account_id"]] = r
+        bal_accounts = []
+        for a in accounts:
+            snap = latest_snap.get(a["id"])
+            age = _age_from_iso(snap["created_at"]) if snap else None
+            bal_accounts.append({
+                "account_id": a["id"],
+                "name": a["name"],
+                "currency": a.get("currency") or "rub",
+                "last_balance": float(snap["actual_balance"]) if snap else None,
+                "last_verified_at": snap["created_at"] if snap else None,
+                "age_days": age,
+                "status": _status_from_age(age, BAL_WARN_D, BAL_ERR_D),
+                "owner_id": a.get("owner_id"),
+                "owner_name": owner_names.get(a.get("owner_id")),
+            })
+        bal_status = _worst([a["status"] for a in bal_accounts])
+
+        latest_by_source: dict[str, str] = {}
+        for r in raw_rows:
+            if r["source_name"] not in latest_by_source:
+                latest_by_source[r["source_name"]] = r["imported_at"]
+        sources = []
+        for name in sorted(latest_by_source):
+            age = _age_from_iso(latest_by_source[name])
+            sources.append({
+                "source_name": name,
+                "last_imported_at": latest_by_source[name],
+                "age_days": age,
+                "status": _status_from_age(age, IMPORT_WARN_D, IMPORT_ERR_D),
+            })
+        import_status = _worst([s["status"] for s in sources])
+        last_activity_at = last_act_rows[0]["created_at"] if last_act_rows else None
+
+        people = {oid: {"owner_id": oid, "name": name, "todos": []}
+                  for oid, name in owner_names.items()}
+        unassigned = []
+
+        def _route(owner_id, todo):
+            if owner_id and owner_id in people:
+                people[owner_id]["todos"].append(todo)
+            else:
+                unassigned.append(todo)
+
+        for tx in uncat:
+            _route(tx.get("owner_id"), {
+                "kind": "uncategorized",
+                "label": f"{tx.get('merchant_raw') or 'операция'} — {float(tx['amount']):g} {tx.get('currency') or 'rub'}",
+                "ref": tx["id"],
+            })
+        for acct in bal_accounts:
+            if acct["status"] in ("amber", "red"):
+                _route(acct["owner_id"], {
+                    "kind": "balance",
+                    "label": f"Сверить баланс: {acct['name']}",
+                    "ref": acct["account_id"],
+                })
+
+        attention_count = (
+            uncat_count
+            + sum(1 for a in bal_accounts if a["status"] in ("amber", "red"))
+            + sum(1 for s in sources if s["status"] in ("amber", "red"))
+        )
+
+        return {
+            "generated_at": now.isoformat(),
+            "attention_count": attention_count,
+            "uncategorized": {
+                "count": uncat_count,
+                "oldest_days": oldest_days,
+                "status": uncat_status,
+                "items": uncat_items,
+            },
+            "balances": {"status": bal_status, "accounts": bal_accounts},
+            "imports": {
+                "status": import_status,
+                "sources": sources,
+                "last_activity_at": last_activity_at,
+            },
+            "people": list(people.values()),
+            "unassigned": unassigned,
+        }
 
 
 def _derive_status(tx: Transaction) -> str:

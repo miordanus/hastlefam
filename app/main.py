@@ -56,5 +56,5 @@ def root(request: Request):
     token = request.cookies.get(SESSION_COOKIE, '')
     payload = verify_session(token) if token else None
     if payload and payload.get('hid'):
-        return RedirectResponse(url=f"/finance/report?household_id={payload['hid']}", status_code=302)
+        return RedirectResponse(url=f"/finance/health?household_id={payload['hid']}", status_code=302)
     return login_page(request)
