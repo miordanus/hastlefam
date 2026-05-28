@@ -18,12 +18,12 @@ app/
   bot/
     main.py                     # aiogram polling bot (worker entrypoint)
     draft_store.py              # Redis-backed draft cache (duplicate confirm flow)
-    handlers/                   # one router per concern; capture.py is the catch-all
+    handlers/                   # one router per concern; capture.py is the catch-all; dashboard.py mints magic-link login URLs
     middlewares/                # logging.py, idempotency.py
     parsers/                    # debt_parser, split_parser, expense_parser
   api/
     deps.py                     # get_db dependency
-    routers/                    # health, tasks, finance, reviews
+    routers/                    # health, tasks, finance, reviews, auth
     schemas/                    # pydantic request/response models
   application/
     services/                   # ask, autocat, budget, finance, fx, import,
@@ -46,7 +46,7 @@ app/
     error_handler.py            # FastAPI 500 handler
     event_logger.py             # writes to event_log table
     prompt_logger.py            # LLM prompt/response logging
-  dashboard/templates/          # Jinja2: index.html, finance_corrections.html, monthly_report.html, data_health.html
+  dashboard/templates/          # Jinja2: index.html, login.html, finance_corrections.html, monthly_report.html, data_health.html
   seeds/                        # run_all + seed_{areas,categories,owners,users}
 api/index.py                    # Vercel adapter (re-exports FastAPI app)
 migrations/                     # alembic env + 0001..0020 versions + manual_apply.sql
@@ -87,7 +87,16 @@ Tests use SQLite in-memory (no real DB needed). `conftest.py` sets dummy env var
 
 ### Two processes, one codebase
 
-**Web** (`app/main.py`) — FastAPI + Jinja2 dashboard, plus routers under `/finance`, `/tasks`, `/reviews`, `/health`, `/auth`. No bot logic, but `TELEGRAM_BOT_TOKEN` IS used (to verify Telegram Login Widget HMAC). The `auth_and_log` middleware protects all paths except `/health`, `/login`, and `/auth/`: an unauthenticated HTML request redirects to `/login`, a JSON request gets 401. Auth is a stateless HMAC-signed `hf_session` cookie (no DB-backed sessions) — see "Web auth" below.  
+**Web** (`app/main.py`) — FastAPI + Jinja2 dashboard, plus routers under `/finance`, `/tasks`, `/reviews`, `/health`, `/auth/*`, `/login`. The web service uses `TELEGRAM_BOT_TOKEN` only to verify Telegram Login signatures (the bot itself runs in the worker).
+
+**Auth (cookie sessions, no shared password):** A middleware in `app/main.py` requires a valid `hf_session` HMAC-signed cookie on every path except `/`, `/health*`, `/login`, and `/auth/*`. JSON requests get `401`, browser requests get `302 → /login`. Sessions are signed with `SESSION_SECRET` (HMAC-SHA256, 30-day TTL); see `app/api/routers/auth.py` (`sign_session`, `verify_session`).
+
+Two ways to log in:
+1. **Telegram Login widget** at `/login` → `GET /auth/telegram/callback` (verifies the `hash` param against `sha256(TELEGRAM_BOT_TOKEN)`, looks up the user by `telegram_id` via Supabase REST when configured else SQLAlchemy, then sets `hf_session`).
+2. **Bot magic link** — `/dashboard` or `/login` in the bot (handler `app/bot/handlers/dashboard.py`) mints a 5-minute signed token and replies with `{DASHBOARD_URL}/auth/tg?t=...`. `GET /auth/tg` verifies and upgrades it to a 30-day session cookie.
+
+`GET /` redirects to `/finance/health?household_id=<hid>` (the data-health home page) if the cookie is valid, otherwise renders `login.html`. Both login paths land on `/finance/health`. `POST /auth/logout` clears the cookie. `DASHBOARD_PASSWORD` is no longer used.
+
 **Worker** (`app/bot/main.py`) — aiogram 3 polling bot + APScheduler (daily status digest at 10:00 MSK, recurring payment reminders). No HTTP port. Fetches FX rates on startup.  
 Railway `Procfile` maps `web:` → uvicorn, `worker:` → bot. `railway.json` has no `startCommand` and no healthcheck entry. `vercel.json` routes everything to `api/index.py` which re-exports the FastAPI app — deploy the web service to either platform.
 
@@ -95,22 +104,11 @@ Railway `Procfile` maps `web:` → uvicorn, `worker:` → bot. `railway.json` ha
 
 Direct SQLAlchemy → Supabase Postgres is unreliable on Vercel (IPv6 / pooler quirks). When `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are set, the finance read endpoints transparently switch to PostgREST via `SupabaseClient` (`app/infrastructure/supabase/rest_client.py`) instead of opening a Postgres socket.
 
-The switch is centralised in `app/api/routers/finance.py` via `_use_rest()` plus per-endpoint dispatchers (`_run_monthly_report`, `_run_cashflow`). The corresponding service methods are named `<name>_via_rest` on `FinanceService` (currently `monthly_report_via_rest`, `cashflow_monthly_via_rest`). **When adding a new finance read endpoint that needs to work on Vercel, write a `*_via_rest` sibling and a `_run_*` dispatcher — do not call `FinanceService(db).<method>` directly from the route.** REST writes go through `sb.patch(...)` / `sb.post(...)` (see `/finance/transactions/{id}/action`).
-
-### Web auth (bot-issued magic links + Telegram Login Widget)
-
-Auth was migrated off the old shared `DASHBOARD_PASSWORD` Basic Auth. **`DASHBOARD_PASSWORD` is gone.** Implementation lives in `app/api/routers/auth.py` + the `auth_and_log` middleware in `app/main.py`.
-
-- **Primary path — bot-issued magic link.** In the bot, `/dashboard` (or `/login`) looks up the user by `telegram_id` (`is_active=True`), calls `sign_magic(uid, hid)` to mint a 5-minute HMAC token, and replies with `{DASHBOARD_URL}/auth/tg?t=<token>`. `GET /auth/tg` verifies the token, then `sign_session(uid, hid)` mints a 30-day session and sets the `hf_session` cookie (`HttpOnly`, `Secure`, `SameSite=Lax`), redirecting to `/finance/health?household_id={hid}` (the data-health home page).
-- **Fallback path — Telegram Login Widget.** `/login` renders `login.html` with the official widget; `GET /auth/telegram/callback` verifies the widget HMAC via `_verify_telegram_auth()` and issues the same session.
-- **`/` is the auth entrypoint.** `GET /` is public: an authed user (valid `hf_session`) is redirected to `/finance/health`; an unauthed user gets the login page.
-- **Tokens are stateless** — `<base64url payload>.<base64url sig>`, payload `{uid, hid, exp}`, HMAC-SHA256 signed with `SESSION_SECRET`, verified with `hmac.compare_digest`. No DB/Redis session store.
-- **User lookup honours the REST fallback** (commit `1953ecf`): when `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are set, lookup goes through PostgREST (`Accept-Profile: hastlefam`) instead of SQLAlchemy.
-- `POST /auth/logout` clears the cookie and redirects to `/login`.
+The switch is centralised in `app/api/routers/finance.py` via `_use_rest()` plus per-endpoint dispatchers (`_run_monthly_report`, `_run_cashflow`). The corresponding service methods are named `<name>_via_rest` on `FinanceService` (currently `monthly_report_via_rest`, `cashflow_monthly_via_rest`). **When adding a new finance read endpoint that needs to work on Vercel, write a `*_via_rest` sibling and a `_run_*` dispatcher — do not call `FinanceService(db).<method>` directly from the route.** REST writes go through `sb.patch(...)` / `sb.post(...)` (see `/finance/transactions/{id}/action`). The Telegram-callback user lookup in `auth.py` follows the same pattern (REST when configured, SQLAlchemy otherwise).
 
 ### Data-health home page (`/finance/health`)
 
-The authed landing page (`data_health.html`). It is a **read-only visibility surface** — its job is to show how complete and how fresh the data is, not to run analytics. Three signals: **uncategorized** (`primary_tag IS NULL`, honouring the ЗАКОН invariants — note this differs from the legacy corrections filter which keys on `category_id`), **stale balances** (age of the latest `BalanceSnapshot` per active account; amber ≥7d, red ≥14d, "never" = red), and **import freshness** (`MAX(imported_at)` per `RawImportTransaction.source_name`; amber ≥3d, red ≥7d). It also produces a **per-person to-do split** keyed on `Owner` (items with no `owner_id` go to a shared bucket; `Owner` has no FK to `User`, so both owners' columns are shown rather than personalising to the logged-in user). Thresholds are module constants in `finance_service.py` (`BAL_WARN_D`, etc.). Computed by `FinanceService.data_health()` with a `data_health_via_rest()` sibling and the `_run_data_health()` dispatcher in `finance.py` (Vercel REST rule). JSON is also available at `/finance/health/data`.
+The authed landing page (`data_health.html`) — where both login paths land. It is a **read-only visibility surface**: how complete and how fresh the data is, not analytics. Three signals: **uncategorized** (`primary_tag IS NULL`, honouring the ЗАКОН invariants — note this differs from the legacy corrections filter which keys on `category_id`), **stale balances** (age of the latest `BalanceSnapshot` per active account; amber ≥7d, red ≥14d, "never" = red), and **import freshness** (`MAX(imported_at)` per `RawImportTransaction.source_name`; amber ≥3d, red ≥7d). It also produces a **per-person to-do split keyed on `users`** (not `owners` — that table is empty in practice): uncategorized items route by `Transaction.user_id`, stale balances by `Account.owner_user_id`; items with neither go to a shared "Общие" bucket. The logged-in `uid` (from the session) is flagged `is_you` and sorted first so the page personalises. Thresholds are module constants in `finance_service.py` (`BAL_WARN_D`, etc.). Computed by `FinanceService.data_health(household_id, current_user_id)` with a `data_health_via_rest()` sibling and the `_run_data_health()` dispatcher in `finance.py` (Vercel REST rule). JSON is also available at `/finance/health/data`.
 
 ### Request flow: Telegram message → DB
 
@@ -124,9 +122,9 @@ The authed landing page (`data_health.html`). It is a **read-only visibility sur
 
 Routers are registered in this exact order in `bot/main.py` (cancel first, capture last):
 
-`cancel` → `start` → `help` → `month` → `upcoming` → `exchange` → `inline_actions` → `duplicate` → `inbox` → `balances` → `rules` → `ask` → `budgets` → `debts` → `cashflow` → `review` → `recurring` → `capture`
+`cancel` → `start` → `help` → `month` → `upcoming` → `exchange` → `inline_actions` → `duplicate` → `inbox` → `balances` → `rules` → `ask` → `budgets` → `debts` → `cashflow` → `review` → `recurring` → `dashboard` → `capture`
 
-User-facing commands implemented across these handlers include `/start`, `/help`, `/month`, `/upcoming`, `/inbox`, `/balances`, `/rules`, `/ask`, `/budgets`, `/debts`, `/cashflow`, `/review`, `/recurring`, `/add`, `/cancel`. Anything not matched by a command falls through to `capture.py` (the `@router.message()` catch-all).
+User-facing commands implemented across these handlers include `/start`, `/help`, `/month`, `/upcoming`, `/inbox`, `/balances`, `/rules`, `/ask`, `/budgets`, `/debts`, `/cashflow`, `/review`, `/recurring`, `/dashboard` (alias `/login`, mints a magic-link to the web dashboard), `/add`, `/cancel`. Anything not matched by a command falls through to `capture.py` (the `@router.message()` catch-all).
 
 ### Database layer
 
@@ -224,16 +222,16 @@ Full instructions + operational contract: `docs/openclaw-agent-instructions.md` 
 |---|---|---|
 | `DATABASE_URL` | yes | `postgresql+psycopg://...` |
 | `ALEMBIC_DATABASE_URL` | yes | same DSN, used by alembic only |
-| `TELEGRAM_BOT_TOKEN` | worker only | optional for web service |
+| `TELEGRAM_BOT_TOKEN` | worker; web if using Telegram Login | worker needs it to poll; web needs it to verify Telegram Login signatures in `/auth/telegram/callback` |
+| `TELEGRAM_BOT_USERNAME` | web (for login UI) | passed to `login.html` so the Telegram Login widget renders |
+| `SESSION_SECRET` | web | HMAC key for `hf_session` cookies and bot-issued magic-link tokens. Without it, all auth endpoints raise |
+| `DASHBOARD_URL` | worker | Base URL the bot uses to build magic-link URLs (`{DASHBOARD_URL}/auth/tg?t=...`); defaults to `https://hustlefam.skvoznoe.app` |
 | `OPENAI_API_KEY` | yes | LLM features |
 | `OPENAI_MODEL` | no | default `gpt-4.1-mini` |
 | `REDIS_URL` | no | default `redis://localhost:6379/0` |
 | `INSIGHTS_ENABLED` | no | default `false`; enables OpenAI insights |
 | `SUPABASE_URL` | conditional | Supabase project URL, e.g. `https://<ref>.supabase.co`. Required by OpenClaw and by the web service's Vercel REST fallback |
 | `SUPABASE_SERVICE_ROLE_KEY` | conditional | Service role key. Used by OpenClaw and, when present alongside `SUPABASE_URL`, switches finance read endpoints to PostgREST instead of SQLAlchemy |
-| `SESSION_SECRET` | web (auth) | HMAC key for signing/verifying magic-link and `hf_session` tokens. Required for web auth |
-| `DASHBOARD_URL` | web (auth) | Base URL the bot puts in magic links, e.g. `https://hustlefam.skvoznoe.app` |
-| `TELEGRAM_BOT_USERNAME` | no | Passed to `login.html` to init the Telegram Login Widget |
 | `APP_ENV` | no | default `local` |
 | `LOG_LEVEL` | no | default `INFO` |
 

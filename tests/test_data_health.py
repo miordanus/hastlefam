@@ -223,6 +223,7 @@ client.cookies.set("hf_session", "x")
 
 def test_health_data_endpoint_returns_json(monkeypatch):
     monkeypatch.setattr(app_main, "verify_session", lambda t: {"uid": "u", "hid": "h"})
+    monkeypatch.setattr("app.api.routers.finance._use_rest", lambda: False)
 
     def fake(self, household_id, current_user_id=None):
         return {"attention_count": 0, "generated_at": "2026-05-28T00:00:00+00:00",
@@ -241,6 +242,7 @@ def test_health_data_endpoint_returns_json(monkeypatch):
 
 def test_health_page_renders(monkeypatch):
     monkeypatch.setattr(app_main, "verify_session", lambda t: {"uid": "u", "hid": "h"})
+    monkeypatch.setattr("app.api.routers.finance._use_rest", lambda: False)
 
     def fake(self, household_id, current_user_id=None):
         return {"attention_count": 2, "generated_at": "2026-05-28T00:00:00+00:00",

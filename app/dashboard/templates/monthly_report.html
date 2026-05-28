@@ -68,14 +68,36 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
 .tab-view.active { display:flex; animation:fadeIn .2s ease; }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
-.hero { position:relative; background:linear-gradient(135deg,#141417 0%,#18181e 100%); border:1px solid var(--border); border-radius:14px; padding:28px 32px 24px; overflow:hidden; }
-.hero-label { font-size:12px; font-weight:500; color:var(--muted); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:10px; }
+.hero { position:relative; background:linear-gradient(135deg,#141417 0%,#18181e 100%); border:1px solid var(--border); border-radius:14px; padding:24px 32px 22px; overflow:hidden; }
+.hero-label { font-size:12px; font-weight:500; color:var(--muted); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:14px; }
 .hero-amount { font-size:52px; font-weight:600; color:var(--text); letter-spacing:-0.02em; line-height:1; }
-.hero-meta { display:flex; align-items:center; gap:8px; margin-top:12px; flex-wrap:wrap; }
+.hero-meta { display:flex; align-items:center; gap:8px; margin-top:14px; flex-wrap:wrap; }
 .hero-meta-muted { font-size:13px; color:var(--subtle); }
 .hero-meta-dot { width:3px; height:3px; border-radius:50%; background:var(--border2); }
 .hero-grid { position:absolute; inset:0; pointer-events:none; }
 .hero-grid > div { position:absolute; top:0; bottom:0; width:1px; background:rgba(99,102,241,0.06); }
+
+/* ── Balance trio (start → now → EOM forecast) ────────────────────────── */
+.balance-trio { display:flex; align-items:center; gap:14px; flex-wrap:nowrap; }
+.trio-card { flex:1; min-width:0; }
+.trio-card.trio-now { flex:1.5; }
+.trio-card-label { font-size:11px; color:var(--subtle); font-weight:500; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px; }
+.trio-card-amt { font-size:26px; font-weight:600; color:var(--text); letter-spacing:-0.02em; line-height:1.05; white-space:nowrap; }
+.trio-now .trio-card-amt { font-size:52px; }
+.trio-card-sub { font-size:11px; color:var(--subtle); margin-top:6px; min-height:14px; }
+.trio-connector { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; color:var(--border2); font-size:18px; flex-shrink:0; }
+.trio-conn-arrow { line-height:1; opacity:.6; }
+.trio-conn-delta { font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; font-size:11px; padding:2px 8px; border-radius:10px; white-space:nowrap; }
+.trio-conn-delta.pos { background:rgba(34,197,94,0.14); color:var(--green); border:1px solid rgba(34,197,94,0.35); }
+.trio-conn-delta.neg { background:rgba(239,68,68,0.14); color:var(--red); border:1px solid rgba(239,68,68,0.35); }
+.trio-conn-delta.flat { background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
+@media (max-width:760px) {
+  .balance-trio { flex-direction:column; align-items:stretch; gap:8px; }
+  .trio-card { width:100%; text-align:left; }
+  .trio-now .trio-card-amt { font-size:42px; }
+  .trio-connector { flex-direction:row; gap:8px; align-self:center; }
+  .trio-conn-arrow { transform:rotate(90deg); }
+}
 
 /* ── Account row ──────────────────────────────────────────────────────── */
 .acc-row { display:flex; gap:10px; overflow-x:auto; padding-bottom:4px; -webkit-overflow-scrolling:touch; }
@@ -224,6 +246,40 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
 /* ── Section card (quarter/year/annual placeholders) ──────────────────── */
 .placeholder { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:28px; text-align:center; color:var(--subtle); }
 .placeholder code { color:var(--accent); font-family:'JetBrains Mono',monospace; font-size:12px; }
+
+/* ── Compare table (Q1 vs Q2 / 2025 vs 2026) ───────────────────────────── */
+.cmp-table { width:100%; border-collapse:collapse; }
+.cmp-table th { font-size:10px; color:var(--border2); text-transform:uppercase; letter-spacing:0.07em; padding:10px 16px; text-align:right; }
+.cmp-table th.l { text-align:left; }
+.cmp-table td { padding:10px 16px; border-top:1px solid var(--surface2); font-size:13px; text-align:right; font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; }
+.cmp-table td.l { text-align:left; font-family:'Inter',system-ui,sans-serif; color:#a1a1aa; }
+.cmp-delta.pos { color:var(--green); }
+.cmp-delta.neg { color:var(--red); }
+.cmp-delta.flat { color:var(--muted); }
+
+/* ── Movers list (↑ outgrew / ↓ shrunk) ────────────────────────────────── */
+.mv-grid { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+.mv-col { padding:12px 16px; }
+.mv-col + .mv-col { border-left:1px solid var(--surface2); }
+.mv-col-head { font-size:11px; color:var(--subtle); text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+.mv-row { display:flex; align-items:center; gap:8px; padding:5px 0; font-size:13px; }
+.mv-tag { flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mv-amt { font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; min-width:64px; text-align:right; color:#a1a1aa; }
+.mv-pct { font-family:'JetBrains Mono',monospace; min-width:54px; text-align:right; font-size:11px; }
+.mv-pct.pos { color:var(--green); }
+.mv-pct.neg { color:var(--red); }
+.mv-pct.new { background:rgba(99,102,241,0.18); color:var(--accent); padding:1px 6px; border-radius:3px; font-weight:600; }
+.mv-empty { color:var(--subtle); font-size:12px; padding:6px 0; }
+@media (max-width:640px) {
+  .mv-grid { grid-template-columns:1fr; }
+  .mv-col + .mv-col { border-left:none; border-top:1px solid var(--surface2); }
+}
+
+/* ── Hero QoQ/YoY chip ─────────────────────────────────────────────────── */
+.delta-chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; padding:3px 9px; border-radius:14px; font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; margin-left:10px; vertical-align:middle; }
+.delta-chip.pos { background:rgba(34,197,94,0.14); color:var(--green); border:1px solid rgba(34,197,94,0.35); }
+.delta-chip.neg { background:rgba(239,68,68,0.14); color:var(--red); border:1px solid rgba(239,68,68,0.35); }
+.delta-chip.flat { background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -264,8 +320,32 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
   <!-- ═══ MONTHLY ═══ -->
   <div class="tab-view active" id="tab-monthly">
     <div class="hero" id="hero-card">
-      <div class="hero-label" id="hero-label">Текущий баланс</div>
-      <div class="hero-amount mono" id="hero-amount">—</div>
+      <div class="hero-label" id="hero-label">Баланс</div>
+      <div class="balance-trio" id="balance-trio">
+        <div class="trio-card trio-start" id="trio-start">
+          <div class="trio-card-label">Старт месяца</div>
+          <div class="trio-card-amt mono" id="trio-start-amt">—</div>
+          <div class="trio-card-sub" id="trio-start-sub">—</div>
+        </div>
+        <div class="trio-connector" id="trio-conn-1">
+          <span class="trio-conn-arrow">→</span>
+          <span class="trio-conn-delta flat" id="trio-delta-1">—</span>
+        </div>
+        <div class="trio-card trio-now" id="trio-now">
+          <div class="trio-card-label" id="trio-now-label">Сейчас</div>
+          <div class="trio-card-amt mono" id="trio-now-amt">—</div>
+          <div class="trio-card-sub" id="trio-now-sub">—</div>
+        </div>
+        <div class="trio-connector" id="trio-conn-2">
+          <span class="trio-conn-arrow">→</span>
+          <span class="trio-conn-delta flat" id="trio-delta-2">—</span>
+        </div>
+        <div class="trio-card trio-eom" id="trio-eom">
+          <div class="trio-card-label">Прогноз EOM</div>
+          <div class="trio-card-amt mono" id="trio-eom-amt">—</div>
+          <div class="trio-card-sub" id="trio-eom-sub">—</div>
+        </div>
+      </div>
       <div class="hero-meta" id="hero-meta"></div>
       <div class="hero-grid" aria-hidden="true">
         <div style="left:20%"></div><div style="left:40%"></div><div style="left:60%"></div><div style="left:80%"></div>
@@ -360,19 +440,26 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
     </section>
   </div>
 
-  <!-- ═══ QUARTERLY ═══ -->
+  <!-- ═══ QUARTERLY (QoQ) ═══ -->
   <div class="tab-view" id="tab-quarterly">
-    <div class="hero">
-      <div class="hero-label">Квартал</div>
-      <div class="hero-amount mono" id="q-title">—</div>
-      <div class="hero-meta"><span class="hero-meta-muted" id="q-range">—</span></div>
+    <div class="hero" id="q-hero">
+      <div class="hero-label" id="q-hero-label">Сальдо квартала</div>
+      <div class="hero-amount mono" id="q-hero-amount">—</div>
+      <div class="hero-meta" id="q-hero-meta"></div>
     </div>
-    <div class="stat-grid" id="q-stats"></div>
+    <div class="cardv">
+      <div class="cardv-head"><span class="cardv-title">Сравнение с прошлым кварталом</span></div>
+      <div id="q-compare"></div>
+    </div>
+    <div class="cardv">
+      <div class="cardv-head"><span class="cardv-title">Движения по категориям расходов</span></div>
+      <div id="q-movers"></div>
+    </div>
     <div class="cardv">
       <div class="cardv-head"><span class="cardv-title">Помесячно</span></div>
       <div class="ledger-wrap">
         <table class="ledger-table">
-          <thead><tr><th>Месяц</th><th class="r">Доходы</th><th class="r">Расходы</th><th class="r">Нетто</th><th class="r">Норма сбережений</th></tr></thead>
+          <thead><tr><th>Месяц</th><th class="r">Доходы</th><th class="r">Расходы</th><th class="r">Сальдо</th><th class="r">Норма сбережений</th></tr></thead>
           <tbody id="q-body"></tbody>
         </table>
       </div>
@@ -435,14 +522,21 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
     </div>
   </div>
 
-  <!-- ═══ ANNUAL ═══ -->
+  <!-- ═══ ANNUAL (YoY) ═══ -->
   <div class="tab-view" id="tab-annual">
-    <div class="hero">
-      <div class="hero-label">Годовой отчёт</div>
-      <div class="hero-amount mono" id="a-title">—</div>
-      <div class="hero-meta"><span class="hero-meta-muted">итоги года</span></div>
+    <div class="hero" id="a-hero">
+      <div class="hero-label" id="a-hero-label">Сальдо года</div>
+      <div class="hero-amount mono" id="a-hero-amount">—</div>
+      <div class="hero-meta" id="a-hero-meta"></div>
     </div>
-    <div class="stat-grid" id="a-stats"></div>
+    <div class="cardv">
+      <div class="cardv-head"><span class="cardv-title">Сравнение с прошлым годом</span></div>
+      <div id="a-compare"></div>
+    </div>
+    <div class="cardv">
+      <div class="cardv-head"><span class="cardv-title">Движения по категориям расходов</span></div>
+      <div id="a-movers"></div>
+    </div>
     <div class="cardv">
       <div class="cardv-head"><span class="cardv-title">Сводка</span></div>
       <div id="a-summary" style="padding:18px 20px;color:var(--muted);font-size:13px;"></div>
@@ -496,6 +590,11 @@ if (_INJECTED && _INJECTED.accounts) {
   _REPORT_MONTH = today.getMonth() + 1;
   HOUSEHOLD_ID = new URLSearchParams(location.search).get('household_id');
 }
+
+// Real-today anchors (independent of report period) — used for the "текущий" badge.
+const _t = new Date(TODAY);
+const _TODAY_Y = _t.getFullYear();
+const _TODAY_M = _t.getMonth() + 1;
 
 // FX rates: real from backend, fallback to plausible defaults
 const FX_RATES = (_INJECTED && _INJECTED.fx_rates) || { usd:73, eur:85, amd:0.2, pln:20, usdt:73 };
@@ -607,6 +706,21 @@ const LEDGER = sorted.map(tx => {
 const currentBal = (_BACKEND_BALANCE !== null)
   ? _BACKEND_BALANCE
   : totalStart + LEDGER.filter(t => !t.is_planned && t.occurred_at <= TODAY).reduce((s,t) => s + t.delta, 0);
+// Backend-supplied alternatives (Fix A); fall back to local computation when absent.
+const startBal = (_INJECTED && typeof _INJECTED.start_balance_rub === 'number')
+  ? _INJECTED.start_balance_rub
+  : totalStart;
+const _isFutureMonth = (() => {
+  const t = new Date(TODAY);
+  if (_REPORT_YEAR > t.getFullYear()) return true;
+  if (_REPORT_YEAR < t.getFullYear()) return false;
+  return _REPORT_MONTH > (t.getMonth() + 1);
+})();
+const eomBal = (_INJECTED && typeof _INJECTED.forecast_eom_rub === 'number')
+  ? _INJECTED.forecast_eom_rub
+  : (_isFutureMonth || _IS_CURRENT_MONTH
+      ? currentBal + LEDGER.filter(t => t.is_planned && t.occurred_at > TODAY).reduce((s,t) => s + t.delta, 0)
+      : currentBal);
 
 // ════════════════════════════════════════════════════════════════════════════
 // CHART.JS — today-line plugin
@@ -643,17 +757,66 @@ if (typeof Chart !== 'undefined') Chart.register(todayLinePlugin);
 // ════════════════════════════════════════════════════════════════════════════
 // HERO + ACCOUNTS + STATS
 // ════════════════════════════════════════════════════════════════════════════
+function _renderTrioDelta(elId, delta) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const cls = Math.abs(delta) < 1 ? 'flat' : (delta >= 0 ? 'pos' : 'neg');
+  el.className = 'trio-conn-delta ' + cls;
+  if (cls === 'flat') { el.textContent = '≈ 0'; return; }
+  const sign = delta >= 0 ? '+' : '−';
+  el.textContent = sign + fmtC(Math.abs(delta), true);
+}
+
 function renderHero() {
-  const label = _IS_CURRENT_MONTH ? 'Текущий баланс' : `Баланс на конец ${MONTHS_GEN[_REPORT_MONTH]}`;
-  document.getElementById('hero-label').textContent = label;
-  document.getElementById('hero-amount').textContent = fmtC(currentBal);
+  document.getElementById('hero-label').textContent = `Баланс · ${MONTHS_FULL[_REPORT_MONTH]} ${_REPORT_YEAR}`;
+  const lastDay = new Date(_REPORT_YEAR, _REPORT_MONTH, 0).getDate();
+  const isPast = !_IS_CURRENT_MONTH && !_isFutureMonth;
+
+  // Reset trio state — every render rebuilds from a clean baseline so toggling
+  // between past / current / future months doesn't leak class/style mutations.
+  const nowCard = document.getElementById('trio-now');
+  const eomCard = document.getElementById('trio-eom');
+  nowCard.style.display = '';
+  eomCard.style.display = '';
+  document.getElementById('trio-conn-2').style.display = '';
+  nowCard.querySelector('.trio-card-label').textContent = 'Сейчас';
+  eomCard.querySelector('.trio-card-label').textContent = 'Прогноз EOM';
+
+  // Trio card content — start card is identical for all three layouts.
+  document.getElementById('trio-start-amt').textContent = fmtC(startBal);
+  document.getElementById('trio-start-sub').textContent = `1 ${MONTHS_GEN[_REPORT_MONTH]}`;
+
+  if (isPast) {
+    // Past month: Start → Финал. Re-purpose the "now" card as Финал; hide EOM.
+    eomCard.style.display = 'none';
+    document.getElementById('trio-conn-2').style.display = 'none';
+    nowCard.querySelector('.trio-card-label').textContent = 'Финал месяца';
+    document.getElementById('trio-now-amt').textContent = fmtC(eomBal);
+    document.getElementById('trio-now-sub').textContent = `${lastDay} ${MONTHS_GEN[_REPORT_MONTH]}`;
+    _renderTrioDelta('trio-delta-1', eomBal - startBal);
+  } else if (_isFutureMonth) {
+    // Future month: Start → Прогноз EOM. Hide Now.
+    nowCard.style.display = 'none';
+    document.getElementById('trio-conn-2').style.display = 'none';
+    document.getElementById('trio-eom-amt').textContent = fmtC(eomBal);
+    document.getElementById('trio-eom-sub').textContent = `${lastDay} ${MONTHS_GEN[_REPORT_MONTH]} · по плановым`;
+    _renderTrioDelta('trio-delta-1', eomBal - startBal);
+  } else {
+    // Current month: full trio.
+    document.getElementById('trio-now-amt').textContent = fmtC(currentBal);
+    document.getElementById('trio-now-sub').textContent = 'обновлено сегодня';
+    document.getElementById('trio-eom-amt').textContent = fmtC(eomBal);
+    document.getElementById('trio-eom-sub').textContent = `${lastDay} ${MONTHS_GEN[_REPORT_MONTH]} · прогноз`;
+    _renderTrioDelta('trio-delta-1', currentBal - startBal);
+    _renderTrioDelta('trio-delta-2', eomBal - currentBal);
+  }
+
   const meta = document.getElementById('hero-meta');
-  const subLabel = `${MONTHS_FULL[_REPORT_MONTH]} ${_REPORT_YEAR}`;
-  const periodTxt = _IS_CURRENT_MONTH ? 'обновлено сегодня' : `данные за ${MONTHS_GEN[_REPORT_MONTH]}`;
+  const periodTxt = _IS_CURRENT_MONTH ? 'обновлено сегодня' : (_isFutureMonth ? 'прогноз по плановым' : `данные за ${MONTHS_GEN[_REPORT_MONTH]}`);
   meta.innerHTML = `
     <span class="hero-meta-muted">${periodTxt}</span>
     <span class="hero-meta-dot"></span>
-    <span class="hero-meta-muted">${subLabel}</span>
+    <span class="hero-meta-muted">${MONTHS_FULL[_REPORT_MONTH]} ${_REPORT_YEAR}</span>
     <span class="hero-meta-dot"></span>
     <span class="hero-meta-muted">${viewCurrency.toUpperCase()}</span>`;
 }
@@ -661,13 +824,18 @@ function renderHero() {
 function renderAccounts() {
   const row = document.getElementById('acc-row');
   row.innerHTML = ACCOUNTS.map(a => {
-    // For the CURRENT month, prefer the latest snapshot (truth as of today)
-    // and ignore the stale opening + intra-month delta walk. For past months,
-    // fall back to the opening + delta computation.
+    // For the CURRENT month, the backend ships balance_rub computed at the
+    // latest snapshot's OWN date (per-date FX) — use it directly to keep
+    // hero balance and account cards in sync. For past months or when the
+    // backend didn't supply balance_rub, fall back to opening + delta walk.
     const latest = _LATEST_SNAPSHOTS[a.id];
     let rubBal;
     let latestAsOf = null;
-    if (_IS_CURRENT_MONTH && latest && typeof latest.actual_balance === 'number') {
+    if (_IS_CURRENT_MONTH && typeof a.balance_rub === 'number') {
+      rubBal = a.balance_rub;
+      latestAsOf = a.balance_as_of || (latest && latest.as_of) || null;
+    } else if (_IS_CURRENT_MONTH && latest && typeof latest.actual_balance === 'number') {
+      // Backwards-compat: backend without balance_rub field. Drift bug applies.
       rubBal = toRub(latest.actual_balance, a.currency);
       latestAsOf = latest.as_of || null;
     } else {
@@ -703,12 +871,8 @@ function renderAccounts() {
 
 function renderStats() {
   const actual = LEDGER.filter(t => !t.is_planned && t.occurred_at <= TODAY);
-  const plannedFuture = LEDGER.filter(t => t.is_planned && t.occurred_at > TODAY);
   const spent = actual.filter(t => t.direction === 'expense').reduce((s,t) => s + t.rubAmount, 0);
   const incRub = actual.filter(t => t.direction === 'income').reduce((s,t) => s + t.rubAmount, 0);
-  const plannedOut = plannedFuture.filter(t => t.direction === 'expense').reduce((s,t) => s + t.rubAmount, 0);
-  const plannedIn  = plannedFuture.filter(t => t.direction === 'income').reduce((s,t) => s + t.rubAmount, 0);
-  const forecastEnd = currentBal + plannedIn - plannedOut;
   const alerts = LEDGER.filter(t => ['overdue','mismatch','unplanned'].includes(t.status)).length;
 
   const lastDay = new Date(_REPORT_YEAR, _REPORT_MONTH, 0).getDate();
@@ -716,12 +880,12 @@ function renderStats() {
   const isCurr = _IS_CURRENT_MONTH;
   const daysPassed = isCurr ? today.getDate() : lastDay;
   const daysLeft = isCurr ? (lastDay - daysPassed) : 0;
+  const avgDaily = daysPassed > 0 ? spent / daysPassed : 0;
 
   const cards = [
-    { label:'Прогноз к концу месяца', value:fmtC(forecastEnd, true), sub:'с учётом плановых',
-      accent: forecastEnd < 0 ? 'var(--red)' : null },
     { label:isCurr ? 'Осталось дней' : 'Дней в месяце', value:String(isCurr ? daysLeft : lastDay), sub:`из ${lastDay} в ${MONTHS_GEN[_REPORT_MONTH]}`, accent:'var(--accent)' },
     { label:'Потрачено (факт)', value:fmtC(spent, true), sub:`доходы ${fmtC(incRub, true)}` },
+    { label:'Средний дневной расход', value:fmtC(avgDaily, true), sub:`за прошедшие ${daysPassed} дн.` },
     { label:'Требуют внимания', value:String(alerts), sub:'просроченных и расхождений',
       accent: alerts > 0 ? 'var(--yellow)' : 'var(--green)' },
   ];
@@ -1175,52 +1339,227 @@ async function loadRange(fromYM, toYM) {
   } catch (e) { return []; }
 }
 
-async function renderQuarterly() {
-  const qStart = Math.floor((_REPORT_MONTH - 1) / 3) * 3 + 1;
-  const fromYM = `${_REPORT_YEAR}-${String(qStart).padStart(2,'0')}`;
-  const toYM   = `${_REPORT_YEAR}-${String(qStart+2).padStart(2,'0')}`;
-  const months = await loadRange(fromYM, toYM);
-  const byMo = new Map(months.map(m => [m.mo, m]));
-  document.getElementById('q-title').textContent = `Q${Math.ceil(_REPORT_MONTH/3)} ${_REPORT_YEAR}`;
-  document.getElementById('q-range').textContent = `${MONTHS_FULL[qStart]} – ${MONTHS_FULL[qStart+2]} ${_REPORT_YEAR}`;
+// ─── Shared helpers for QoQ / YoY zones ────────────────────────────────────
 
-  let totInc = 0, totExp = 0;
+function _qPrevRange(year, month) {
+  // Given a month inside Qx, return [{fromYM, toYM}] for Qx-1 and Qx.
+  const qStart = Math.floor((month - 1) / 3) * 3 + 1;
+  const qEnd = qStart + 2;
+  const prevQStart = qStart - 3, prevQEnd = qEnd - 3;
+  const norm = (y, m) => {
+    while (m < 1)  { m += 12; y--; }
+    while (m > 12) { m -= 12; y++; }
+    return { y, m };
+  };
+  const a = norm(year, prevQStart), b = norm(year, prevQEnd);
+  const c = norm(year, qStart),     d = norm(year, qEnd);
+  const ym = ({y, m}) => `${y}-${String(m).padStart(2,'0')}`;
+  return {
+    curr:  { from: ym(c), to: ym(d), label: `Q${Math.ceil(qStart/3)} ${c.y}` },
+    prior: { from: ym(a), to: ym(b), label: `Q${Math.ceil(prevQStart<=0?(prevQStart+12)/3:prevQStart/3)} ${a.y}` },
+  };
+}
+
+function _yPrevRange(year) {
+  const ym = (y, m) => `${y}-${String(m).padStart(2,'0')}`;
+  return {
+    curr:  { from: ym(year,1),   to: ym(year,12),   label: `${year}` },
+    prior: { from: ym(year-1,1), to: ym(year-1,12), label: `${year-1}` },
+  };
+}
+
+function _pctChip(deltaPct, opts = {}) {
+  // opts.unit: '%' or 'pp' (percentage points, for savings-rate delta)
+  // opts.flatThreshold: |Δ| below this renders flat-styled
+  const unit = opts.unit || '%';
+  const ft   = (opts.flatThreshold != null) ? opts.flatThreshold : 1;
+  if (deltaPct == null || isNaN(deltaPct)) return `<span class="delta-chip flat">—</span>`;
+  const sign = deltaPct > 0 ? '▲ +' : deltaPct < 0 ? '▼ ' : '';
+  const cls  = Math.abs(deltaPct) < ft ? 'flat' : (deltaPct > 0 ? 'pos' : 'neg');
+  return `<span class="delta-chip ${cls}">${sign}${deltaPct}${unit}</span>`;
+}
+
+function _planChip() {
+  return `<span style="font-size:9px;background:rgba(99,102,241,0.18);color:var(--accent);border:1px solid rgba(99,102,241,0.45);border-radius:3px;padding:1px 5px;margin-left:4px;letter-spacing:.04em">план</span>`;
+}
+
+function _safePct(curr, prior) {
+  if (prior === 0 || prior == null) return null;
+  return Math.round((curr - prior) / prior * 100);
+}
+
+function _compareTable({ priorLabel, currLabel, prior, curr }) {
+  // prior/curr: { income_rub, expense_rub }
+  const incΔ  = _safePct(curr.income_rub, prior.income_rub);
+  const expΔ  = _safePct(curr.expense_rub, prior.expense_rub);
+  const netP  = prior.income_rub - prior.expense_rub;
+  const netC  = curr.income_rub - curr.expense_rub;
+  const netΔ  = _safePct(netC, netP);
+  const savP  = prior.income_rub > 0 ? Math.round(netP / prior.income_rub * 100) : null;
+  const savC  = curr.income_rub > 0  ? Math.round(netC / curr.income_rub * 100)  : null;
+  const savΔ  = (savP != null && savC != null) ? (savC - savP) : null;
+  const row = (label, p, c, deltaPct, unit) => `<tr>
+    <td class="l">${label}</td>
+    <td>${p == null ? '—' : fmtC(p, true)}</td>
+    <td>${c == null ? '—' : fmtC(c, true)}</td>
+    <td>${_pctChip(deltaPct, { unit: unit || '%', flatThreshold: unit === 'pp' ? 1 : 2 })}</td>
+  </tr>`;
+  const rowPct = (label, p, c, deltaPp) => `<tr>
+    <td class="l">${label}</td>
+    <td>${p == null ? '—' : p + '%'}</td>
+    <td>${c == null ? '—' : c + '%'}</td>
+    <td>${_pctChip(deltaPp, { unit: 'pp', flatThreshold: 1 })}</td>
+  </tr>`;
+  return `<table class="cmp-table">
+    <thead><tr><th class="l"></th><th>${esc(priorLabel)}</th><th>${esc(currLabel)}</th><th>Δ</th></tr></thead>
+    <tbody>
+      ${row('Доходы',  prior.income_rub,  curr.income_rub,  incΔ)}
+      ${row('Расходы', prior.expense_rub, curr.expense_rub, expΔ)}
+      ${row('Сальдо',  netP, netC, netΔ)}
+      ${rowPct('Норма сбережений', savP, savC, savΔ)}
+    </tbody>
+  </table>`;
+}
+
+function _moversList(movers) {
+  // movers: [{tag, current_rub, prior_rub, delta_rub, delta_pct}], sorted by abs(delta)
+  if (!movers || movers.length === 0) {
+    return `<div class="mv-grid"><div class="mv-col"><div class="mv-empty">Нет данных за прошлый период</div></div><div class="mv-col"><div class="mv-empty">—</div></div></div>`;
+  }
+  const ups   = movers.filter(m => m.delta_rub > 0).slice(0, 5);
+  const downs = movers.filter(m => m.delta_rub < 0).slice(0, 5);
+  const fmtDelta = (d) => (d > 0 ? '+' : '−') + fmtC(Math.abs(d), true);
+  const renderRow = (m) => {
+    const pctHtml = m.delta_pct == null
+      ? `<span class="mv-pct new">новая</span>`
+      : `<span class="mv-pct ${m.delta_pct >= 0 ? 'pos' : 'neg'}">${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%</span>`;
+    return `<div class="mv-row">
+      <span class="mv-tag">#${esc(m.tag)}</span>
+      <span class="mv-amt">${fmtDelta(m.delta_rub)}</span>
+      ${pctHtml}
+    </div>`;
+  };
+  return `<div class="mv-grid">
+    <div class="mv-col">
+      <div class="mv-col-head"><span style="color:var(--red)">↑</span> Выросли</div>
+      ${ups.length ? ups.map(renderRow).join('') : '<div class="mv-empty">Нет роста</div>'}
+    </div>
+    <div class="mv-col">
+      <div class="mv-col-head"><span style="color:var(--green)">↓</span> Сократились</div>
+      ${downs.length ? downs.map(renderRow).join('') : '<div class="mv-empty">Нет сокращений</div>'}
+    </div>
+  </div>`;
+}
+
+async function loadMovers(currFrom, currTo, prevFrom, prevTo) {
+  if (!HOUSEHOLD_ID) return null;
+  const url = new URL('/finance/category_movers', location.origin);
+  url.searchParams.set('household_id', HOUSEHOLD_ID);
+  url.searchParams.set('from', currFrom);
+  url.searchParams.set('to', currTo);
+  url.searchParams.set('prev_from', prevFrom);
+  url.searchParams.set('prev_to', prevTo);
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return { _error: `HTTP ${r.status}` };
+    return await r.json();
+  } catch (e) { return { _error: e.message }; }
+}
+
+async function renderQuarterly() {
+  const { curr, prior } = _qPrevRange(_REPORT_YEAR, _REPORT_MONTH);
+  document.getElementById('q-hero-amount').textContent = '…';
+  document.getElementById('q-hero-meta').innerHTML = '';
+  document.getElementById('q-compare').innerHTML = '<div style="padding:14px 16px;color:var(--muted);font-size:13px">Загрузка…</div>';
+  document.getElementById('q-movers').innerHTML = '';
+  document.getElementById('q-body').innerHTML = '';
+
+  // Parallel fetch: two separate loadRange calls (prior Q, current Q) so we
+  // don't depend on the RPC including a year column — each call returns 3
+  // months within a single year, identifiable by m.mo alone.
+  const [priorMonths, currMonths, movers] = await Promise.all([
+    loadRange(prior.from, prior.to),
+    loadRange(curr.from,  curr.to),
+    loadMovers(curr.from, curr.to, prior.from, prior.to),
+  ]);
+
+  const sumIncExp = (rows) => rows.reduce((acc, m) => {
+    acc.inc += Number(m.actual_income_rub  || 0);
+    acc.exp += Number(m.actual_expense_rub || 0);
+    return acc;
+  }, { inc: 0, exp: 0 });
+  const p = sumIncExp(priorMonths);
+  const c = sumIncExp(currMonths);
+  let pInc = p.inc, pExp = p.exp, cInc = c.inc, cExp = c.exp;
+  const [cfy, cfm] = curr.from.split('-').map(Number);
+  const cNet = cInc - cExp;
+  const pNet = pInc - pExp;
+  const cSav = cInc > 0 ? Math.round(cNet / cInc * 100) : null;
+
+  // Hero
+  document.getElementById('q-hero-label').textContent = `Сальдо квартала · ${curr.label}`;
+  document.getElementById('q-hero-amount').innerHTML = (cNet >= 0 ? '+' : '') + fmtC(cNet) + ' ' + _pctChip(_safePct(cNet, pNet));
+  const metaTxt = `доход ${fmtC(cInc, true)} · расход ${fmtC(cExp, true)}` +
+                  (cSav != null ? ` · норма ${cSav}%` : '');
+  document.getElementById('q-hero-meta').innerHTML = `<span class="hero-meta-muted">${metaTxt}</span>`;
+
+  // Compare
+  document.getElementById('q-compare').innerHTML = _compareTable({
+    priorLabel: prior.label,
+    currLabel:  curr.label,
+    prior: { income_rub: pInc, expense_rub: pExp },
+    curr:  { income_rub: cInc, expense_rub: cExp },
+  });
+
+  // Movers
+  if (!movers || movers._error) {
+    document.getElementById('q-movers').innerHTML = `<div class="mv-empty" style="padding:14px 16px">Не удалось загрузить движения (${movers ? movers._error : 'нет данных'})</div>`;
+  } else {
+    document.getElementById('q-movers').innerHTML = _moversList(movers.movers);
+  }
+
+  // Per-month rows (current quarter only — 3 rows + total)
+  const qStart = cfm;
+  const currByMo = new Map(currMonths.map(m => [m.mo, m]));
   const rows = [];
-  for (let m = qStart; m <= qStart+2; m++) {
-    const r = byMo.get(m);
+  for (let mm = qStart; mm <= qStart + 2; mm++) {
+    const r = currByMo.get(mm);
     const inc = r ? Number(r.actual_income_rub  || 0) : 0;
     const exp = r ? Number(r.actual_expense_rub || 0) : 0;
-    totInc += inc; totExp += exp;
+    const plInc = r ? Number(r.planned_income_rub  || 0) : 0;
+    const plExp = r ? Number(r.planned_expense_rub || 0) : 0;
+    const isCurr = (mm === _TODAY_M && cfy === _TODAY_Y);
+    const isFuture = (cfy > _TODAY_Y) || (cfy === _TODAY_Y && mm > _TODAY_M);
+    const hasActual = inc > 0 || exp > 0;
+    if (!hasActual && isFuture && (plInc > 0 || plExp > 0)) {
+      const plNet = plInc - plExp;
+      rows.push(`<tr style="opacity:.55">
+        <td>${MONTHS_FULL[mm]} ${_planChip()}</td>
+        <td class="r mono" style="color:var(--green)">${plInc ? '+' + fmtC(plInc, true) : '—'}</td>
+        <td class="r mono" style="color:var(--red)">${plExp ? '−' + fmtC(plExp, true) : '—'}</td>
+        <td class="r mono" style="color:${plNet >= 0 ? 'var(--green)' : 'var(--red)'}">${(plNet >= 0 ? '+' : '') + fmtC(plNet, true)}</td>
+        <td class="r mono">—</td>
+      </tr>`);
+      continue;
+    }
     const net = inc - exp;
     const sav = inc > 0 ? Math.round(net / inc * 100) : null;
-    const isCurr = (m === _REPORT_MONTH);
-    rows.push(`<tr style="${isCurr?'background:#1c1c22':''}">
-      <td>${MONTHS_FULL[m]}${isCurr?' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>':''}</td>
-      <td class="r mono" style="color:${inc?'var(--green)':'var(--subtle)'}">${inc?'+'+fmtC(inc,true):'—'}</td>
-      <td class="r mono" style="color:${exp?'var(--red)':'var(--subtle)'}">${exp?'−'+fmtC(exp,true):'—'}</td>
-      <td class="r mono" style="color:${net>=0?'var(--green)':'var(--red)'}">${(net>=0?'+':'')+fmtC(net,true)}</td>
-      <td class="r mono">${sav===null?'—':sav+'%'}</td>
+    rows.push(`<tr style="${isCurr ? 'background:#1c1c22' : ''}">
+      <td>${MONTHS_FULL[mm]}${isCurr ? ' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>' : ''}</td>
+      <td class="r mono" style="color:${inc ? 'var(--green)' : 'var(--subtle)'}">${inc ? '+' + fmtC(inc, true) : '—'}</td>
+      <td class="r mono" style="color:${exp ? 'var(--red)' : 'var(--subtle)'}">${exp ? '−' + fmtC(exp, true) : '—'}</td>
+      <td class="r mono" style="color:${net >= 0 ? 'var(--green)' : 'var(--red)'}">${(net >= 0 ? '+' : '') + fmtC(net, true)}</td>
+      <td class="r mono">${sav == null ? '—' : sav + '%'}</td>
     </tr>`);
   }
   rows.push(`<tr style="border-top:2px solid var(--border)">
-    <td style="font-weight:600">Итого Q${Math.ceil(_REPORT_MONTH/3)}</td>
-    <td class="r mono" style="color:var(--green)">+${fmtC(totInc,true)}</td>
-    <td class="r mono" style="color:var(--red)">−${fmtC(totExp,true)}</td>
-    <td class="r mono" style="color:${(totInc-totExp)>=0?'var(--green)':'var(--red)'}">${(totInc-totExp>=0?'+':'')+fmtC(totInc-totExp,true)}</td>
-    <td class="r mono">${totInc?Math.round((totInc-totExp)/totInc*100)+'%':'—'}</td>
+    <td style="font-weight:600">Итого ${curr.label}</td>
+    <td class="r mono" style="color:var(--green)">+${fmtC(cInc, true)}</td>
+    <td class="r mono" style="color:var(--red)">−${fmtC(cExp, true)}</td>
+    <td class="r mono" style="color:${cNet >= 0 ? 'var(--green)' : 'var(--red)'}">${(cNet >= 0 ? '+' : '') + fmtC(cNet, true)}</td>
+    <td class="r mono">${cSav == null ? '—' : cSav + '%'}</td>
   </tr>`);
   document.getElementById('q-body').innerHTML = rows.join('');
-
-  const sav = totInc ? Math.round((totInc-totExp)/totInc*100) : 0;
-  document.getElementById('q-stats').innerHTML = [
-    { label:'Доходы',  value:fmtC(totInc, true), accent:'var(--green)' },
-    { label:'Расходы', value:fmtC(totExp, true), accent:'var(--red)' },
-    { label:'Сальдо',  value:fmtC(totInc-totExp, true), accent:(totInc-totExp)>=0?'var(--green)':'var(--red)' },
-    { label:'Норма сбережений', value:sav+'%' },
-  ].map(c => `<div class="stat">
-    <div class="stat-label">${c.label}</div>
-    <div class="stat-val mono" style="${c.accent?'color:'+c.accent+';':''}">${c.value}</div>
-  </div>`).join('');
 }
 
 let _yChart = null;
@@ -1237,14 +1576,28 @@ async function renderYearly() {
     const r = byMo.get(m);
     const inc = r ? Number(r.actual_income_rub  || 0) : 0;
     const exp = r ? Number(r.actual_expense_rub || 0) : 0;
+    const plInc = r ? Number(r.planned_income_rub  || 0) : 0;
+    const plExp = r ? Number(r.planned_expense_rub || 0) : 0;
+    const hasActual = inc > 0 || exp > 0;
+    const hasPlanned = plInc > 0 || plExp > 0;
+    const isFuture = (_REPORT_YEAR > _TODAY_Y) || (_REPORT_YEAR === _TODAY_Y && m > _TODAY_M);
+    // Chart + YTD totals: actual only, regardless of planned visibility.
     incData.push(inc || null);
     expData.push(exp || null);
-    if (r) { totInc += inc; totExp += exp; monthCount++; }
-    if (!r) {
+    if (hasActual) { totInc += inc; totExp += exp; monthCount++; }
+    if (!hasActual && isFuture && hasPlanned) {
+      const plNet = plInc - plExp;
+      rows.push(`<tr style="opacity:.55">
+        <td>${MONTHS_FULL[m]} ${_planChip()}</td>
+        <td class="r mono" style="color:var(--green)">${plInc ? '+' + fmtC(plInc, true) : '—'}</td>
+        <td class="r mono" style="color:var(--red)">${plExp ? '−' + fmtC(plExp, true) : '—'}</td>
+        <td class="r mono" style="color:${plNet >= 0 ? 'var(--green)' : 'var(--red)'}">${(plNet >= 0 ? '+' : '') + fmtC(plNet, true)}</td>
+      </tr>`);
+    } else if (!hasActual) {
       rows.push(`<tr style="opacity:.45"><td>${MONTHS_FULL[m]}</td><td class="r">—</td><td class="r">—</td><td class="r" style="color:var(--subtle);font-size:11px">нет данных</td></tr>`);
     } else {
       const net = inc - exp;
-      const isCurr = (m === _REPORT_MONTH);
+      const isCurr = (m === _TODAY_M && _REPORT_YEAR === _TODAY_Y);
       rows.push(`<tr style="${isCurr?'background:#1c1c22':''}">
         <td>${MONTHS_FULL[m]}${isCurr?' <span style="font-size:9px;background:#1e3a5f;color:#93c5fd;border:1px solid #1d4ed8;border-radius:3px;padding:1px 5px;margin-left:4px">текущий</span>':''}</td>
         <td class="r mono" style="color:var(--green)">+${fmtC(inc,true)}</td>
@@ -1287,38 +1640,75 @@ async function renderYearly() {
 }
 
 async function renderAnnual() {
-  const months = await loadRange(`${_REPORT_YEAR}-01`, `${_REPORT_YEAR}-12`);
-  document.getElementById('a-title').textContent = `${_REPORT_YEAR}`;
-  let totInc = 0, totExp = 0, bestMonth = null, worstMonth = null;
-  months.forEach(m => {
-    const inc = Number(m.actual_income_rub || 0);
-    const exp = Number(m.actual_expense_rub || 0);
-    totInc += inc; totExp += exp;
-    const net = inc - exp;
-    if (!bestMonth || net > bestMonth.net) bestMonth = { mo:m.mo, net };
-    if (!worstMonth || exp > worstMonth.exp) worstMonth = { mo:m.mo, exp };
-  });
-  const sav = totInc ? Math.round((totInc-totExp)/totInc*100) : 0;
-  document.getElementById('a-stats').innerHTML = [
-    { label:'Доходы',  value:fmtC(totInc, true), accent:'var(--green)' },
-    { label:'Расходы', value:fmtC(totExp, true), accent:'var(--red)' },
-    { label:'Сальдо',  value:fmtC(totInc-totExp, true), accent:(totInc-totExp)>=0?'var(--green)':'var(--red)' },
-    { label:'Норма сбережений', value:sav+'%' },
-  ].map(c => `<div class="stat">
-    <div class="stat-label">${c.label}</div>
-    <div class="stat-val mono" style="${c.accent?'color:'+c.accent+';':''}">${c.value}</div>
-  </div>`).join('');
+  const { curr, prior } = _yPrevRange(_REPORT_YEAR);
+  document.getElementById('a-hero-amount').textContent = '…';
+  document.getElementById('a-hero-meta').innerHTML = '';
+  document.getElementById('a-compare').innerHTML = '<div style="padding:14px 16px;color:var(--muted);font-size:13px">Загрузка…</div>';
+  document.getElementById('a-movers').innerHTML = '';
+  document.getElementById('a-summary').innerHTML = '';
 
+  // Two separate loadRange calls so we don't depend on the RPC including a
+  // year column — each call returns 12 months within a single year.
+  const [priorRows, currRows, movers] = await Promise.all([
+    loadRange(prior.from, prior.to),
+    loadRange(curr.from,  curr.to),
+    loadMovers(curr.from, curr.to, prior.from, prior.to),
+  ]);
+
+  let pInc = 0, pExp = 0, cInc = 0, cExp = 0;
+  const currMonths = [];
+  for (const m of priorRows) {
+    pInc += Number(m.actual_income_rub  || 0);
+    pExp += Number(m.actual_expense_rub || 0);
+  }
+  for (const m of currRows) {
+    const inc = Number(m.actual_income_rub  || 0);
+    const exp = Number(m.actual_expense_rub || 0);
+    cInc += inc; cExp += exp;
+    currMonths.push({ mo: m.mo, inc, exp });
+  }
+  const cNet = cInc - cExp;
+  const pNet = pInc - pExp;
+  const cSav = cInc > 0 ? Math.round(cNet / cInc * 100) : null;
+
+  // Hero
+  document.getElementById('a-hero-label').textContent = `Сальдо года · ${curr.label}`;
+  document.getElementById('a-hero-amount').innerHTML = (cNet >= 0 ? '+' : '') + fmtC(cNet) + ' ' + _pctChip(_safePct(cNet, pNet));
+  const metaTxt = `доход ${fmtC(cInc, true)} · расход ${fmtC(cExp, true)}` + (cSav != null ? ` · норма ${cSav}%` : '');
+  document.getElementById('a-hero-meta').innerHTML = `<span class="hero-meta-muted">${metaTxt}</span>`;
+
+  // Compare
+  document.getElementById('a-compare').innerHTML = _compareTable({
+    priorLabel: prior.label,
+    currLabel:  curr.label,
+    prior: { income_rub: pInc, expense_rub: pExp },
+    curr:  { income_rub: cInc, expense_rub: cExp },
+  });
+
+  // Movers
+  if (!movers || movers._error) {
+    document.getElementById('a-movers').innerHTML = `<div class="mv-empty" style="padding:14px 16px">Не удалось загрузить движения (${movers ? movers._error : 'нет данных'})</div>`;
+  } else {
+    document.getElementById('a-movers').innerHTML = _moversList(movers.movers);
+  }
+
+  // Insights inset (preserved from previous Annual narrative)
+  let bestMonth = null, worstMonth = null;
+  currMonths.forEach(m => {
+    const net = m.inc - m.exp;
+    if (!bestMonth || net > bestMonth.net) bestMonth = { mo: m.mo, net };
+    if (!worstMonth || m.exp > worstMonth.exp) worstMonth = { mo: m.mo, exp: m.exp };
+  });
   let summary = '';
-  if (months.length === 0) {
+  if (currMonths.length === 0) {
     summary = '<div class="placeholder">Нет данных за этот год</div>';
   } else {
     summary = `<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:13px">
-      ${bestMonth ? `<li>📈 Лучший месяц по сальдо: <b>${MONTHS_FULL[bestMonth.mo]}</b> (${fmtC(bestMonth.net,true)})</li>` : ''}
-      ${worstMonth ? `<li>💸 Самый расходный месяц: <b>${MONTHS_FULL[worstMonth.mo]}</b> (${fmtC(worstMonth.exp,true)})</li>` : ''}
-      <li>📊 Месяцев с данными: <b>${months.length}</b> из 12</li>
-      <li>💰 Средний доход в месяц: <b>${fmtC(months.length ? totInc/months.length : 0, true)}</b></li>
-      <li>🧾 Средний расход в месяц: <b>${fmtC(months.length ? totExp/months.length : 0, true)}</b></li>
+      ${bestMonth ? `<li>📈 Лучший месяц по сальдо: <b>${MONTHS_FULL[bestMonth.mo]}</b> (${fmtC(bestMonth.net, true)})</li>` : ''}
+      ${worstMonth ? `<li>💸 Самый расходный месяц: <b>${MONTHS_FULL[worstMonth.mo]}</b> (${fmtC(worstMonth.exp, true)})</li>` : ''}
+      <li>📊 Месяцев с данными: <b>${currMonths.length}</b> из 12</li>
+      <li>💰 Средний доход в месяц: <b>${fmtC(currMonths.length ? cInc / currMonths.length : 0, true)}</b></li>
+      <li>🧾 Средний расход в месяц: <b>${fmtC(currMonths.length ? cExp / currMonths.length : 0, true)}</b></li>
     </ul>`;
   }
   document.getElementById('a-summary').innerHTML = summary;
@@ -1454,25 +1844,32 @@ function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.h-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-view').forEach(v => v.classList.toggle('active', v.id === `tab-${tab}`));
+  // Persist tab in URL so reloads / period nav land on the same tab.
+  const url = new URL(location.href);
+  if (tab === 'monthly') url.searchParams.delete('tab');
+  else url.searchParams.set('tab', tab);
+  history.replaceState(null, '', url.toString());
   renderActiveTab();
 }
 
 function navPeriod(delta) {
   let y = _REPORT_YEAR, m = _REPORT_MONTH;
-  if (activeTab === 'monthly') {
+  const params = new URLSearchParams(location.search);
+  // Carry active tab unless we're on the default (monthly).
+  if (activeTab && activeTab !== 'monthly') params.set('tab', activeTab);
+
+  if (activeTab === 'monthly' || activeTab === 'cashflow') {
     m += delta;
   } else if (activeTab === 'quarterly') {
     m += delta * 3;
   } else {
-    // year / annual
-    const params = new URLSearchParams(location.search);
-    params.set('month', `${y+delta}-01`);
+    // year / annual: shift by full year, anchor to Jan
+    params.set('month', `${y + delta}-01`);
     location.search = params.toString();
     return;
   }
   while (m < 1)  { m += 12; y--; }
   while (m > 12) { m -= 12; y++; }
-  const params = new URLSearchParams(location.search);
   params.set('month', `${y}-${String(m).padStart(2,'0')}`);
   location.search = params.toString();
 }
@@ -1496,6 +1893,15 @@ document.getElementById('view-toggle').querySelectorAll('.filter-btn').forEach(b
 });
 document.getElementById('filter-account').addEventListener('change', e => { currentFilter.account = e.target.value; renderLedger(); });
 document.getElementById('filter-status').addEventListener('change', e => { currentFilter.status = e.target.value; renderLedger(); });
+
+// Initial tab from URL (?tab=) — default monthly.
+const _initialTab = (new URLSearchParams(location.search)).get('tab');
+if (_initialTab && document.getElementById(`tab-${_initialTab}`)) {
+  // Mirror what switchTab does, but without rewriting the URL (already there).
+  activeTab = _initialTab;
+  document.querySelectorAll('.h-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === _initialTab));
+  document.querySelectorAll('.tab-view').forEach(v => v.classList.toggle('active', v.id === `tab-${_initialTab}`));
+}
 
 renderLedgerFilters();
 renderActiveTab();

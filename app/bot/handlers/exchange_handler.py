@@ -107,6 +107,9 @@ def _apply_balance_update(
         parse_status="ok",
         primary_tag=tag,
         extra_tags=[],
+        # ЗАКОН: adjustment rows mirror an exchange between own accounts —
+        # they must NOT contribute to actual income/expense totals.
+        is_internal_transfer=True,
     )
     db.add(adj_tx)
 

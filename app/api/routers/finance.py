@@ -235,27 +235,21 @@ def report_range(
     from_: str = Query(..., alias="from", description="YYYY-MM"),
     to_:   str = Query(..., alias="to",   description="YYYY-MM"),
 ) -> dict:
-    """Per-month income/expense totals (RUB) for [from..to] inclusive."""
+    """Per-month income/expense totals (RUB) for [from..to] inclusive.
+
+    Each month row carries both actual_* and planned_* fields so the dashboard
+    can render upcoming planned amounts without inflating actual totals.
+    """
     if not _use_rest():
         raise HTTPException(status_code=503, detail="Supabase REST not configured")
-    import datetime as _dt
-    import calendar as _cal
-    try:
-        fy, fm = [int(x) for x in from_.split("-")]
-        ty, tm = [int(x) for x in to_.split("-")]
-    except ValueError:
-        raise HTTPException(status_code=422, detail="from/to must be YYYY-MM")
-    p_from = _dt.date(fy, fm, 1).isoformat()
-    last_day = _cal.monthrange(ty, tm)[1]
-    p_to = _dt.date(ty, tm, last_day).isoformat()
-    from app.infrastructure.supabase import SupabaseClient
-    s = get_settings()
-    with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
-        rows = sb.rpc("monthly_totals", {
-            "p_household_id": household_id,
-            "p_from": p_from,
-            "p_to": p_to,
-        })
+    for ym in (from_, to_):
+        try:
+            y, m = [int(x) for x in ym.split("-")]
+            if not (1 <= m <= 12):
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=422, detail="from/to must be YYYY-MM")
+    rows = FinanceService(None).monthly_totals_via_rest(household_id, from_, to_)
     return {"months": rows}
 
 
@@ -276,3 +270,27 @@ def update_correction(
         url=f"/finance/corrections?household_id={household_id}&uncategorized={str(uncategorized).lower()}",
         status_code=303,
     )
+
+
+@router.get("/category_movers")
+def category_movers(
+    household_id: str = Query(...),
+    from_:     str = Query(..., alias="from",      description="YYYY-MM, current period start"),
+    to_:       str = Query(..., alias="to",        description="YYYY-MM, current period end"),
+    prev_from: str = Query(..., alias="prev_from", description="YYYY-MM, prior period start"),
+    prev_to:   str = Query(..., alias="prev_to",   description="YYYY-MM, prior period end"),
+) -> dict:
+    """Top expense-category movers across two adjacent periods (REST-only)."""
+    if not _use_rest():
+        raise HTTPException(status_code=503, detail="Supabase REST not configured")
+    for ym in (from_, to_, prev_from, prev_to):
+        try:
+            y, m = [int(x) for x in ym.split("-")]
+            if not (1 <= m <= 12):
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=422, detail="period bounds must be YYYY-MM")
+    return FinanceService(None).category_movers_via_rest(
+        household_id, from_, to_, prev_from, prev_to
+    )
+

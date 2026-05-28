@@ -59,6 +59,56 @@ def _worst(statuses: list[str]) -> str:
     return "green"
 
 
+# ─── REST-mode FX helpers (per-date conversion) ──────────────────────────────
+# Used by the *_via_rest service methods. Mirror fx_service.convert_to_rub
+# semantics (date-aware, 7-day backward fallback) but operate over
+# bulk-fetched fx_rates rows instead of a SQLAlchemy session.
+
+def _build_fx_lookup(fx_rows: list[dict]) -> dict[str, list[tuple[str, float]]]:
+    """{currency_lower -> [(date_str, rate), …]} sorted by date desc per currency."""
+    by_cur: dict[str, list[tuple[str, float]]] = {}
+    for r in fx_rows:
+        cur = (r.get("from_currency") or "").lower()
+        if not cur:
+            continue
+        by_cur.setdefault(cur, []).append(((r.get("date") or "")[:10], float(r["rate"])))
+    for k in by_cur:
+        by_cur[k].sort(key=lambda x: x[0], reverse=True)
+    return by_cur
+
+
+def _rub_on_date(
+    amount: float,
+    currency: str | None,
+    occurred_date: str | None,
+    fx_by_cur: dict[str, list[tuple[str, float]]],
+) -> float:
+    """Convert amount to RUB using the fx_rate on/before occurred_date (7-day fallback).
+
+    Falls back to 1.0 if no rate found within 7 days; same silent behaviour as the
+    previous latest-only lookup. Missing-rate cells should be backfilled separately.
+    """
+    cur = (currency or "rub").lower()
+    if cur == "rub":
+        return amount
+    if cur == "usdt":
+        cur = "usd"
+    rates = fx_by_cur.get(cur, [])
+    d_iso = (occurred_date or "")[:10]
+    if not d_iso:
+        return amount * rates[0][1] if rates else amount
+    try:
+        d = date.fromisoformat(d_iso)
+    except ValueError:
+        # Unparseable date → can't do a meaningful per-date lookup. Silent 1:1.
+        return amount
+    cutoff = (d - timedelta(days=7)).isoformat()
+    for row_date, rate in rates:
+        if cutoff <= row_date <= d_iso:
+            return amount * rate
+    return amount  # silent 1:1; backfill fx_rates if this matters
+
+
 class FinanceService:
     def __init__(self, db: Session):
         self.db = db
@@ -915,18 +965,22 @@ class FinanceService:
                             "as_of": (r.get("created_at") or "")[:10],
                         }
 
-            # Latest FX rates (one row per currency)
+            # FX rates: pull a window covering the viewed month + a 14-day backward
+            # buffer (so the per-date helper's 7-day fallback always has data even
+            # near the window's left edge). Also include rows up to today, since the
+            # account-card "latest_snapshots" convert at the most-recent snapshot
+            # date, which can be after end_dt of the viewed month.
+            fx_window_start = (start_dt - timedelta(days=14)).date().isoformat()
+            today_iso_d = date.today().isoformat()
             fx_rows = sb.get("fx_rates", {
                 "select": "from_currency,rate,date",
                 "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{today_iso_d}"],
                 "order": "date.desc",
-                "limit": "60",
             })
-            fx_latest: dict[str, float] = {}
-            for r in fx_rows:
-                cur = (r.get("from_currency") or "").lower()
-                if cur and cur not in fx_latest:
-                    fx_latest[cur] = float(r["rate"])
+            fx_by_cur = _build_fx_lookup(fx_rows)
+            # Latest-per-currency view (kept for frontend payload compat).
+            fx_latest: dict[str, float] = {cur: rows[0][1] for cur, rows in fx_by_cur.items() if rows}
 
         today = date.today()
         tag_map: dict[str, float] = {}
@@ -973,40 +1027,71 @@ class FinanceService:
         is_current = (year == today_d.year and month == today_d.month)
         today_iso = today_d.isoformat()
 
-        def _to_rub(amount: float, cur: str | None) -> float:
-            c = (cur or "rub").lower()
-            if c == "rub":
-                return amount
-            if c == "usdt":
-                c = "usd"
-            rate = fx_latest.get(c, 1.0)
-            return amount * rate
-
+        # Anchor-snapshot RUB conversion uses the snapshot's own date.
         total_start_rub = 0.0
         for a in accounts:
             snap = snapshots.get(a["id"])
             if not snap:
                 continue
-            total_start_rub += _to_rub(snap["actual_balance"], a.get("currency"))
+            total_start_rub += _rub_on_date(
+                snap["actual_balance"], a.get("currency"), snap.get("as_of"), fx_by_cur,
+            )
 
+        # Transaction deltas: each converts at its own occurred_at date.
+        # delta_rub: actual income/expense up to today (current view) or for the whole
+        #            month (past/future views).
+        # forecast_planned_rub: planned-not-yet-actual income/expense, used for the
+        #            EOM forecast in current+future views; ignored for past views.
+        is_future = (year > today_d.year) or (year == today_d.year and month > today_d.month)
         delta_rub = 0.0
+        forecast_planned_rub = 0.0
         for tx in txs:
-            if tx.get("is_planned"):
-                continue
             if tx.get("is_internal_transfer"):
                 continue
             if tx.get("direction") == "exchange":
                 continue
             occ = (tx.get("occurred_at") or "")[:10]
+            sign = 1 if tx.get("direction") == "income" else (-1 if tx.get("direction") == "expense" else 0)
+            if sign == 0:
+                continue
+            rub = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
+            if tx.get("is_planned"):
+                # Current or future month: planned rows belong to EOM forecast,
+                # regardless of whether occurred_at is before or after today.
+                # Overdue planned (occ <= today in current view) is still expected
+                # to happen this month; it just hasn't materialised yet.
+                # Past months: planned rows ignored — what didn't happen didn't happen.
+                if is_current or is_future:
+                    forecast_planned_rub += sign * rub
+                continue
             if is_current and occ > today_iso:
                 continue
-            rub = _to_rub(float(tx["amount"]), tx.get("currency"))
-            if tx.get("direction") == "income":
-                delta_rub += rub
-            elif tx.get("direction") == "expense":
-                delta_rub -= rub
+            delta_rub += sign * rub
 
         balance_value_rub = total_start_rub + delta_rub
+        # EOM forecast: only meaningful for current or future months.
+        forecast_eom_rub = balance_value_rub + forecast_planned_rub if (is_current or is_future) else balance_value_rub
+
+        # Per-account RUB balance computed at the LATEST snapshot's own date.
+        # Single source of truth for the dashboard account cards — frontend renders
+        # this directly instead of calling toRub() with today's FX (which produced
+        # silent drift whenever FX moved between the snapshot date and today).
+        account_payload = []
+        for a in accounts:
+            latest = latest_snapshots.get(a["id"]) or {}
+            native = latest.get("actual_balance")
+            balance_rub = (
+                _rub_on_date(float(native), a.get("currency"), latest.get("as_of"), fx_by_cur)
+                if native is not None else None
+            )
+            account_payload.append({
+                "id": a["id"],
+                "name": a["name"],
+                "currency": a["currency"],
+                "balance_native": float(native) if native is not None else None,
+                "balance_rub": balance_rub,
+                "balance_as_of": latest.get("as_of"),
+            })
 
         return {
             "year": year,
@@ -1014,10 +1099,9 @@ class FinanceService:
             "household_id": household_id,
             "is_current_month": is_current,
             "balance_value_rub": balance_value_rub,
-            "accounts": [
-                {"id": a["id"], "name": a["name"], "currency": a["currency"]}
-                for a in accounts
-            ],
+            "start_balance_rub": total_start_rub,
+            "forecast_eom_rub": forecast_eom_rub,
+            "accounts": account_payload,
             "snapshots": snapshots,
             "latest_snapshots": latest_snapshots,
             "transactions": out_txs,
@@ -1400,6 +1484,202 @@ class FinanceService:
             },
             "months": months_out,
         }
+
+    # ─── Category movers (QoQ / YoY) ─────────────────────────────────────────
+
+    def category_movers_via_rest(
+        self,
+        household_id: str,
+        period_from: str,   # YYYY-MM, current period start
+        period_to: str,     # YYYY-MM, current period end
+        prev_from: str,     # YYYY-MM, prior period start
+        prev_to: str,       # YYYY-MM, prior period end
+    ) -> dict[str, Any]:
+        """Per-tag expense aggregates across two adjacent periods (RUB-converted).
+
+        Returns {"current": {...}, "prior": {...}, "movers": [...]} where movers is
+        sorted by abs(delta_rub) descending. Vercel/REST-only — same posture as
+        /finance/report/range. Filters: direction=expense, is_planned=false,
+        is_internal_transfer=false, is_skipped=false.
+        """
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+        import calendar as _cal
+        import datetime as _dt
+
+        def _ym_bounds(ym_from: str, ym_to: str) -> tuple[str, str, str, str]:
+            """Return (date_start, date_end, dt_start_iso, dt_end_iso).
+
+            Date strings are used for in-Python bucket comparison against
+            occurred_at[:10]. Datetime strings (timezone-aware, end-of-day)
+            are used for the PostgREST filter so we don't truncate the last
+            day of timestamptz-stored transactions.
+            """
+            fy, fm = [int(x) for x in ym_from.split("-")]
+            ty, tm = [int(x) for x in ym_to.split("-")]
+            last_day = _cal.monthrange(ty, tm)[1]
+            d_start = _dt.date(fy, fm, 1).isoformat()
+            d_end = _dt.date(ty, tm, last_day).isoformat()
+            dt_start = _dt.datetime(fy, fm, 1, tzinfo=timezone.utc).isoformat()
+            dt_end = _dt.datetime(ty, tm, last_day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+            return d_start, d_end, dt_start, dt_end
+
+        curr_start, curr_end, curr_start_dt, curr_end_dt = _ym_bounds(period_from, period_to)
+        prev_start, prev_end, prev_start_dt, prev_end_dt = _ym_bounds(prev_from, prev_to)
+        # PostgREST range covers both windows; filter into buckets in Python.
+        full_start_dt = min(curr_start_dt, prev_start_dt)
+        full_end_dt = max(curr_end_dt, prev_end_dt)
+        # FX window: 14d before the earliest period start, latest needed = full_end_dt's date.
+        full_start_date = _dt.date.fromisoformat(full_start_dt[:10])
+        fx_window_start = (full_start_date - _dt.timedelta(days=14)).isoformat()
+
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            txs = sb.get("transactions", {
+                "select": "occurred_at,amount,currency,primary_tag",
+                "household_id": f"eq.{household_id}",
+                "direction": "eq.expense",
+                "is_planned": "eq.false",
+                "is_internal_transfer": "eq.false",
+                "is_skipped": "eq.false",
+                "occurred_at": [f"gte.{full_start_dt}", f"lte.{full_end_dt}"],
+                "limit": "50000",
+            })
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{full_end_dt[:10]}"],
+                "order": "date.desc",
+            })
+
+        fx_by_cur = _build_fx_lookup(fx_rows)
+
+        curr_by_tag: dict[str, float] = {}
+        prior_by_tag: dict[str, float] = {}
+        curr_total = 0.0
+        prior_total = 0.0
+
+        for tx in txs:
+            occ = (tx.get("occurred_at") or "")[:10]
+            amount_rub = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
+            tag = tx.get("primary_tag") or "(без тега)"
+            if curr_start <= occ <= curr_end:
+                curr_by_tag[tag] = curr_by_tag.get(tag, 0.0) + amount_rub
+                curr_total += amount_rub
+            elif prev_start <= occ <= prev_end:
+                prior_by_tag[tag] = prior_by_tag.get(tag, 0.0) + amount_rub
+                prior_total += amount_rub
+
+        all_tags = set(curr_by_tag.keys()) | set(prior_by_tag.keys())
+        movers: list[dict[str, Any]] = []
+        for tag in all_tags:
+            c = curr_by_tag.get(tag, 0.0)
+            p = prior_by_tag.get(tag, 0.0)
+            delta = c - p
+            if p > 0:
+                delta_pct: int | None = round(delta / p * 100)
+            elif c > 0:
+                delta_pct = None   # newly used category
+            else:
+                continue            # both zero — skip
+            movers.append({
+                "tag": tag,
+                "current_rub": c,
+                "prior_rub": p,
+                "delta_rub": delta,
+                "delta_pct": delta_pct,
+            })
+
+        movers.sort(key=lambda m: abs(m["delta_rub"]), reverse=True)
+
+        return {
+            "current": {"from": period_from, "to": period_to, "total_rub": curr_total},
+            "prior":   {"from": prev_from,   "to": prev_to,   "total_rub": prior_total},
+            "movers":  movers,
+        }
+
+    # ─── Per-month totals (actual + planned) — replaces monthly_totals RPC ──
+
+    def monthly_totals_via_rest(
+        self,
+        household_id: str,
+        p_from: str,   # YYYY-MM inclusive
+        p_to: str,     # YYYY-MM inclusive
+    ) -> list[dict[str, Any]]:
+        """Per-month income/expense totals across [p_from..p_to], RUB-converted.
+
+        Returns one row per (year, month) within the window that has any matching
+        transaction. Each row includes both actual and planned aggregates so the
+        dashboard can render planned future months without polluting actual
+        totals. Direction restricted to income/expense; internal transfers and
+        skipped rows are excluded everywhere.
+
+        Replaces the Supabase RPC `monthly_totals` (which only returned
+        actual_* and lives outside of Python migrations).
+        """
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+        import calendar as _cal
+        import datetime as _dt
+
+        fy, fm = [int(x) for x in p_from.split("-")]
+        ty, tm = [int(x) for x in p_to.split("-")]
+        last_day = _cal.monthrange(ty, tm)[1]
+        window_start = _dt.datetime(fy, fm, 1, tzinfo=timezone.utc)
+        dt_start = window_start.isoformat()
+        dt_end = _dt.datetime(ty, tm, last_day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+        fx_window_start = (window_start - _dt.timedelta(days=14)).date().isoformat()
+
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            txs = sb.get("transactions", {
+                "select": "occurred_at,direction,amount,currency,is_planned",
+                "household_id": f"eq.{household_id}",
+                "direction": "in.(income,expense)",
+                "is_internal_transfer": "eq.false",
+                "is_skipped": "eq.false",
+                "occurred_at": [f"gte.{dt_start}", f"lte.{dt_end}"],
+                "limit": "50000",
+            })
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{dt_end[:10]}"],
+                "order": "date.desc",
+            })
+
+        fx_by_cur = _build_fx_lookup(fx_rows)
+
+        buckets: dict[tuple[int, int], dict[str, float]] = {}
+        for tx in txs:
+            occ = tx.get("occurred_at") or ""
+            try:
+                y = int(occ[0:4])
+                mo = int(occ[5:7])
+            except (ValueError, IndexError):
+                continue
+            key = (y, mo)
+            b = buckets.setdefault(key, {
+                "actual_income_rub": 0.0,
+                "actual_expense_rub": 0.0,
+                "planned_income_rub": 0.0,
+                "planned_expense_rub": 0.0,
+            })
+            amt = _rub_on_date(float(tx["amount"]), tx.get("currency"), occ, fx_by_cur)
+            direction = tx.get("direction")
+            is_planned = bool(tx.get("is_planned"))
+            field = (
+                "planned_income_rub"  if is_planned and direction == "income"  else
+                "planned_expense_rub" if is_planned and direction == "expense" else
+                "actual_income_rub"   if direction == "income"                 else
+                "actual_expense_rub"
+            )
+            b[field] += amt
+
+        out: list[dict[str, Any]] = []
+        for (y, mo), b in sorted(buckets.items()):
+            out.append({"y": y, "mo": mo, **b})
+        return out
 
     # ─── Legacy: keep for existing API routes ─────────────────────────────────
 
