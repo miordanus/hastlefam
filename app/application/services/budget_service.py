@@ -229,6 +229,108 @@ def get_budget_status(
     return result
 
 
+def get_budget_status_via_rest(household_id: str, month_key: str) -> list[dict[str, Any]]:
+    """REST-API mirror of get_budget_status(). Talks to PostgREST via
+    SupabaseClient instead of opening a Postgres socket (the web host is
+    REST-only). Same return shape and ЗАКОН filters.
+
+    Uses the *stored* rollover_amount (does NOT run apply_rollover, which writes).
+    """
+    import calendar
+
+    from app.infrastructure.config.settings import get_settings
+    from app.infrastructure.supabase import SupabaseClient
+
+    try:
+        year, month = int(month_key[:4]), int(month_key[5:7])
+    except (ValueError, IndexError):
+        return []
+
+    month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+    last_day = calendar.monthrange(year, month)[1]
+    month_end = datetime(year, month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    settings = get_settings()
+    with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+        budgets = sb.get("tag_budgets", {
+            "select": "id,tag,limit_amount,rollover_amount,rollover_enabled,currency",
+            "household_id": f"eq.{household_id}",
+            "month_key": f"eq.{month_key}",
+        })
+        txs = sb.get("transactions", {
+            "select": "primary_tag,amount,direction,is_planned,is_skipped,occurred_at",
+            "household_id": f"eq.{household_id}",
+            "direction": "eq.expense",
+            "is_skipped": "eq.false",
+            "occurred_at": f"gte.{month_start.isoformat()}",
+        })
+
+    def _parse(iso: str | None) -> datetime | None:
+        if not iso:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+    # Keep only this month's expense rows (the stub doesn't apply the date filter).
+    month_rows = []
+    for t in txs:
+        if (t.get("direction") or "").lower() != "expense" or t.get("is_skipped"):
+            continue
+        occ = _parse(t.get("occurred_at"))
+        if occ is None or not (month_start <= occ <= month_end):
+            continue
+        month_rows.append((t, occ))
+
+    result = []
+    for budget in budgets:
+        tag = budget.get("tag")
+        actual_spent = Decimal("0")
+        planned_amount = Decimal("0")
+        for t, occ in month_rows:
+            if t.get("primary_tag") != tag:
+                continue
+            amt = Decimal(str(t.get("amount") or 0))
+            if t.get("is_planned"):
+                if occ > now:
+                    planned_amount += amt
+            else:
+                actual_spent += amt
+
+        limit = Decimal(str(budget.get("limit_amount") or 0))
+        rollover = Decimal(str(budget.get("rollover_amount") or 0))
+        effective_limit = limit + rollover
+        remaining = effective_limit - actual_spent - planned_amount
+        pct_used = float(actual_spent / effective_limit * 100) if effective_limit > 0 else 0.0
+        if pct_used >= 100:
+            status = "over_budget"
+        elif pct_used >= 80:
+            status = "at_risk"
+        else:
+            status = "ok"
+
+        result.append({
+            "budget_id": str(budget.get("id")),
+            "category_name": tag,
+            "tag": tag,
+            "limit_amount": limit,
+            "rollover_amount": rollover,
+            "effective_limit": effective_limit,
+            "rollover_enabled": bool(budget.get("rollover_enabled")),
+            "currency": budget.get("currency") or "RUB",
+            "actual_spent": actual_spent,
+            "planned_amount": planned_amount,
+            "remaining_after_planned": remaining,
+            "pct_used": pct_used,
+            "status": status,
+        })
+
+    return result
+
+
 async def check_and_alert(
     household_id: str,
     session: Session,

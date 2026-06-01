@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.schemas.finance import (
+    BalanceSnapshotCreate,
     BudgetUpsert,
     SQLImportRequest,
     TransactionCorrectionUpdate,
@@ -376,19 +377,87 @@ def list_budgets(
     month: str = Query(..., description="YYYY-MM"),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Per-tag budget status (limit / spent / remaining) for the month."""
+    """Per-tag budget status (limit / spent / remaining) for the month.
+
+    REST-aware: the deployed web is REST-only, so SQLAlchemy here would 500.
+    """
+    if _use_rest():
+        from app.application.services.budget_service import get_budget_status_via_rest
+        return {"budgets": get_budget_status_via_rest(household_id, month)}
     from app.application.services.budget_service import get_budget_status
     return {"budgets": get_budget_status(household_id, month, db)}
 
 
 @router.post("/budgets")
 def upsert_budget(body: BudgetUpsert, db: Session = Depends(get_db)) -> dict:
-    """Create or update a per-tag monthly budget limit."""
+    """Create or update a per-tag monthly budget limit. REST or SQLAlchemy."""
+    tag = FinanceService._clean_tag(body.tag) or ""
+    if _use_rest():
+        from app.infrastructure.supabase import SupabaseClient
+        import uuid as _u
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            existing = sb.get("tag_budgets", {
+                "select": "id",
+                "household_id": f"eq.{body.household_id}",
+                "month_key": f"eq.{body.month_key}",
+                "tag": f"eq.{tag}",
+            })
+            patch = {"limit_amount": float(body.limit_amount), "currency": body.currency}
+            if body.rollover_enabled is not None:
+                patch["rollover_enabled"] = body.rollover_enabled
+            if existing:
+                bid = existing[0]["id"]
+                sb.patch("tag_budgets", {"id": f"eq.{bid}"}, patch)
+            else:
+                bid = str(_u.uuid4())
+                sb.post("tag_budgets", [{
+                    "id": bid,
+                    "household_id": body.household_id,
+                    "month_key": body.month_key,
+                    "tag": tag,
+                    "limit_amount": float(body.limit_amount),
+                    "currency": body.currency,
+                    "rollover_enabled": bool(body.rollover_enabled),
+                    "rollover_amount": 0,
+                }])
+        return {"ok": True, "id": bid, "tag": tag, "limit_amount": float(body.limit_amount)}
+
     b = FinanceService(db).upsert_tag_budget(
         body.household_id, body.month_key, body.tag, body.limit_amount,
         currency=body.currency, rollover_enabled=body.rollover_enabled,
     )
     return {"ok": True, "id": str(b.id), "tag": b.tag, "limit_amount": float(b.limit_amount)}
+
+
+@router.post("/balances")
+def record_balance(body: BalanceSnapshotCreate, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Record a current-balance snapshot from the web (the bot's 🔄 Сверить).
+    The discrepancy vs. transactions surfaces as drift on the data-health page."""
+    uid = getattr(request.state, "user_id", None)
+    if _use_rest():
+        import datetime as _dt
+        import uuid as _u
+        sid = str(_u.uuid4())
+        row = {
+            "id": sid,
+            "household_id": body.household_id,
+            "account_id": body.account_id,
+            "actual_balance": float(body.actual_balance),
+            "note": body.note,
+            "created_by_user_id": uid,
+            "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        }
+        from app.infrastructure.supabase import SupabaseClient
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            sb.post("balance_snapshots", [row])
+        return {"ok": True, "snapshot_id": sid}
+
+    snap, _ = FinanceService(db).update_balance_snapshot(
+        body.account_id, body.household_id, body.actual_balance, uid,
+    )
+    return {"ok": True, "snapshot_id": str(snap.id)}
 
 
 @router.get("/category_movers")

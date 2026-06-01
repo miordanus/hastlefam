@@ -1910,6 +1910,8 @@ class FinanceService:
         )
         if prev is None:
             return None, None
+        if prev.actual_balance is None or latest_snap.actual_balance is None:
+            return None, None
         txs = (
             self.db.query(Transaction)
             .filter(
@@ -2029,7 +2031,7 @@ class FinanceService:
                 "account_id": str(acct.id),
                 "name": acct.name,
                 "currency": (acct.currency.value if hasattr(acct.currency, "value") else acct.currency),
-                "last_balance": float(latest.actual_balance) if latest else None,
+                "last_balance": float(latest.actual_balance) if latest and latest.actual_balance is not None else None,
                 "last_verified_at": latest.created_at.isoformat() if latest else None,
                 "age_days": age,
                 "status": status,
@@ -2216,6 +2218,14 @@ class FinanceService:
             if len(snaps) < 2:
                 return None, None
             latest_s, prev_s = snaps[0], snaps[1]
+            # Defensive: a corrupted snapshot with a null balance can't reconcile.
+            if prev_s.get("actual_balance") is None or latest_s.get("actual_balance") is None:
+                return None, None
+            try:
+                prev_bal = Decimal(str(prev_s["actual_balance"]))
+                latest_bal = Decimal(str(latest_s["actual_balance"]))
+            except (ArithmeticError, ValueError):
+                return None, None
             lo, hi = _parse_iso(prev_s["created_at"]), _parse_iso(latest_s["created_at"])
             delta = Decimal("0")
             for t in attributed_rows:
@@ -2229,8 +2239,8 @@ class FinanceService:
                     delta += amt
                 else:
                     delta -= amt
-            computed = Decimal(str(prev_s["actual_balance"])) + delta
-            drift = Decimal(str(latest_s["actual_balance"])) - computed
+            computed = prev_bal + delta
+            drift = latest_bal - computed
             return float(computed), float(drift)
 
         latest_snap: dict[str, dict] = {k: v[0] for k, v in snaps_by_acct.items()}
@@ -2243,7 +2253,7 @@ class FinanceService:
                 "account_id": a["id"],
                 "name": a["name"],
                 "currency": a.get("currency") or "rub",
-                "last_balance": float(snap["actual_balance"]) if snap else None,
+                "last_balance": float(snap["actual_balance"]) if snap and snap.get("actual_balance") is not None else None,
                 "last_verified_at": snap["created_at"] if snap else None,
                 "age_days": age,
                 "status": _status_from_age(age, BAL_WARN_D, BAL_ERR_D),

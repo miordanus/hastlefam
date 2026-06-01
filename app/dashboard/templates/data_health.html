@@ -109,6 +109,34 @@ const fmtAmt = (a,c) => `${Number(a).toLocaleString('ru-RU')} ${String(c||'').to
 const fmtDate = iso => { if(!iso) return '—'; try { return new Date(iso).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'}); } catch(e){ return '—'; } };
 const statusDot = s => `<span class="card-dot dot-${s}"></span>`;
 
+async function reconcile(accountId){
+  const acc = ((D && D.balances && D.balances.accounts) || []).find(a => String(a.account_id) === String(accountId));
+  if(!acc) return;
+  const name = acc.name || '';
+  const currency = String(acc.currency || '').toUpperCase();
+  const prefill = acc.last_balance != null ? String(acc.last_balance) : '';
+  const raw = window.prompt(`Текущий баланс по счёту «${name}» (${currency}):`, prefill);
+  if(raw == null) return; // отмена
+  const cleaned = raw.replace(/\s/g, '').replace(',', '.');
+  if(cleaned === '' || !isFinite(Number(cleaned))) return; // не число — ничего не делаем
+  try {
+    const resp = await fetch('/finance/balances', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ household_id: HID, account_id: accountId, actual_balance: cleaned }),
+    });
+    let data = null;
+    try { data = await resp.json(); } catch(e){ data = null; }
+    if(resp.ok && data && data.ok){
+      location.reload();
+    } else {
+      alert('Не удалось сохранить — ' + ((data && data.error) || resp.status));
+    }
+  } catch(e){
+    alert('Не удалось сохранить — ' + (e && e.message ? e.message : 'ошибка сети'));
+  }
+}
+
 function render(){
   const root = document.getElementById('root');
   if(!D){ root.innerHTML = '<div class="panel-empty">Нет household_id — данные не загружены.</div>'; return; }
@@ -154,9 +182,10 @@ function render(){
     <td class="mono">${driftCell(a)}</td>
     <td class="t-num">${a.age_days==null?'ни разу':days(a.age_days)}</td>
     <td><span class="badge txt-${a.status}">${statusDot(a.status)}${a.status==='green'?'свежий':a.status==='amber'?'пора сверить':'устарел'}</span></td>
+    <td><a class="cta" href="#" onclick="reconcile('${esc(a.account_id)}');return false;">Сверить</a></td>
   </tr>`).join('');
   const accPanel = `<div class="panel"><div class="panel-head">Счета и сверка баланса</div>
-    ${(b.accounts||[]).length ? `<table><thead><tr><th>Счёт</th><th>Последний баланс</th><th>Расчётный баланс</th><th>Расхождение</th><th>Сверяли</th><th>Статус</th></tr></thead><tbody>${accRows}</tbody></table>`
+    ${(b.accounts||[]).length ? `<table><thead><tr><th>Счёт</th><th>Последний баланс</th><th>Расчётный баланс</th><th>Расхождение</th><th>Сверяли</th><th>Статус</th><th>Действие</th></tr></thead><tbody>${accRows}</tbody></table>`
       : '<div class="panel-empty">Нет активных счетов.</div>'}</div>`;
 
   // Sources table
