@@ -67,3 +67,28 @@ class BudgetUpsert(BaseModel):
     limit_amount: Decimal
     currency: str = "RUB"
     rollover_enabled: bool | None = None
+
+
+class BalanceSnapshotCreate(BaseModel):
+    household_id: str
+    account_id: str
+    actual_balance: Decimal
+    note: str | None = None
+
+
+class TagAssignment(BaseModel):
+    tx_id: str
+    tag: str | None = None
+
+
+class BulkTagRequest(BaseModel):
+    household_id: str
+    assignments: list[TagAssignment]
+
+
+class AccountCreate(BaseModel):
+    household_id: str
+    name: str
+    currency: str = "RUB"
+    owner_user_id: str | None = None
+    is_shared: bool = True

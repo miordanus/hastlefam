@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HastleFam — Счета</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+:root {
+  --bg:#09090b; --surface:#141417; --surface2:#1a1a1f; --border:#27272a; --border2:#3f3f46;
+  --text:#e4e4e7; --muted:#71717a; --subtle:#52525b; --accent:#6366f1;
+  --green:#22c55e; --red:#ef4444; --yellow:#f59e0b; --radius:10px;
+}
+body { background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif; font-size:14px; line-height:1.5; min-height:100dvh; -webkit-font-smoothing:antialiased; }
+.mono { font-family:'JetBrains Mono','Fira Code',monospace; font-variant-numeric:tabular-nums; }
+a { color:inherit; text-decoration:none; }
+.h-root { position:sticky; top:0; z-index:50; background:rgba(9,9,11,0.92); backdrop-filter:blur(12px); border-bottom:1px solid #1f1f23; }
+.h-inner { max-width:1120px; margin:0 auto; padding:0 20px; height:52px; display:flex; align-items:center; gap:12px; }
+.h-brand { display:flex; align-items:center; gap:8px; }
+.h-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); }
+.h-name { font-size:14px; font-weight:600; letter-spacing:0.03em; color:#fff; }
+.h-right { margin-left:auto; display:flex; align-items:center; gap:14px; }
+.h-link { font-size:12px; color:var(--muted); }
+.h-link:hover { color:var(--text); }
+.container { max-width:1120px; margin:0 auto; padding:24px 20px 64px; display:flex; flex-direction:column; gap:18px; }
+.hero { background:linear-gradient(135deg,#141417 0%,#18181e 100%); border:1px solid var(--border); border-radius:14px; padding:24px 28px; }
+.hero-label { font-size:12px; font-weight:500; color:var(--muted); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:10px; }
+.hero-row { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+.hero-num { font-size:46px; font-weight:600; letter-spacing:-0.02em; line-height:1; }
+.hero-cap { font-size:14px; color:#a1a1aa; }
+.panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+.panel-head { padding:13px 18px; border-bottom:1px solid #1f1f23; font-size:13px; font-weight:600; color:#a1a1aa; }
+.panel-empty { padding:18px; font-size:13px; color:var(--subtle); }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-size:11px; color:var(--subtle); font-weight:500; text-transform:uppercase; letter-spacing:0.05em; padding:9px 18px; border-bottom:1px solid #1f1f23; }
+td { padding:11px 18px; font-size:13px; border-bottom:1px solid var(--surface2); }
+tr:last-child td { border-bottom:none; }
+.t-num { color:#a1a1aa; text-align:right; }
+.t-right { text-align:right; }
+.foot td { font-weight:600; color:var(--text); border-top:1px solid var(--border2); }
+.tag { font-size:11px; color:var(--subtle); border:1px solid var(--border2); border-radius:4px; padding:1px 6px; }
+.warn { color:var(--yellow); font-size:12px; }
+form.add { display:flex; gap:10px; flex-wrap:wrap; padding:16px 18px; align-items:flex-end; }
+.f { display:flex; flex-direction:column; gap:4px; }
+.f label { font-size:11px; color:var(--subtle); text-transform:uppercase; letter-spacing:0.05em; }
+.f input, .f select { background:var(--surface2); border:1px solid var(--border2); color:var(--text); border-radius:6px; padding:7px 10px; font-size:13px; font-family:inherit; }
+.f input:focus, .f select:focus { outline:none; border-color:var(--accent); }
+.chk { flex-direction:row; align-items:center; gap:6px; }
+.btn { border:none; font-size:13px; padding:8px 18px; border-radius:7px; cursor:pointer; font-family:inherit; font-weight:600; background:var(--accent); color:#fff; }
+@media (max-width:760px){ form.add { flex-direction:column; align-items:stretch; } .f input,.f select { width:100%; } }
+</style>
+</head>
+<body>
+<div class="h-root"><div class="h-inner">
+  <div class="h-brand"><span class="h-dot"></span><span class="h-name">HastleFam</span></div>
+  <div class="h-right">
+    <a class="h-link" href="/finance/report?household_id={{ household_id or '' }}">Отчёт</a>
+    <a class="h-link" href="/finance/health?household_id={{ household_id or '' }}">Здоровье</a>
+    <a class="h-link" href="/finance/planned?household_id={{ household_id or '' }}">Планы</a>
+    <a class="h-link" href="/finance/quality?household_id={{ household_id or '' }}">Качество</a>
+    <a class="h-link" href="/auth/logout">Выйти</a>
+  </div>
+</div></div>
+
+<script type="application/json" id="accounts-data">{{ accounts_data | tojson }}</script>
+<script type="application/json" id="hid-data">{{ (household_id or '') | tojson }}</script>
+
+<div class="container" id="root"><div class="panel-empty">Загрузка…</div></div>
+
+<script>
+const D = (() => { try { return JSON.parse(document.getElementById('accounts-data').textContent || 'null'); } catch(e){ return null; } })();
+const HID = (() => { try { return JSON.parse(document.getElementById('hid-data').textContent || '""'); } catch(e){ return ''; } })();
+const CURRENCIES = ['RUB','USD','USDT','EUR','AMD'];
+
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtRub = a => `${Math.round(Number(a)||0).toLocaleString('ru-RU')} ₽`;
+const fmtNative = (a,c) => a==null?'—':`${Number(a).toLocaleString('ru-RU')} ${String(c||'').toUpperCase()}`;
+function fmtDate(iso){ if(!iso) return 'нет сверки'; const d=new Date(iso); return isNaN(d)?esc(iso):d.toLocaleDateString('ru-RU',{day:'2-digit',month:'short',year:'2-digit'}); }
+
+async function addAccount(ev){
+  ev.preventDefault();
+  const name = document.getElementById('a-name').value.trim();
+  if(!name){ alert('Введите название'); return; }
+  const body = {
+    household_id: HID,
+    name,
+    currency: document.getElementById('a-cur').value,
+    owner_user_id: document.getElementById('a-owner').value || null,
+    is_shared: document.getElementById('a-shared').checked,
+  };
+  try {
+    const r = await fetch('/finance/accounts', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    if(!r.ok){ alert('Не удалось — '+r.status); return; }
+    setTimeout(()=>location.reload(), 150);
+  } catch(e){ alert('Ошибка: '+e.message); }
+}
+
+function render(){
+  const root = document.getElementById('root');
+  if(!D){ root.innerHTML = '<div class="panel-empty">Нет household_id — данные не загружены.</div>'; return; }
+  const fxWarn = D.fx_complete===false ? ` <span class="warn">⚠ нет курса для части валют — итог неполный</span>` : '';
+  const hero = `<div class="hero"><div class="hero-label">Все счета в рублях</div>
+    <div class="hero-row"><span class="hero-num">${fmtRub(D.consolidated_rub)}</span><span class="hero-cap">${(D.accounts||[]).length} ${'счёт/счета/счетов'} · база ₽${fxWarn}</span></div></div>`;
+
+  const rows = (D.accounts||[]).map(a => `<tr>
+    <td>${esc(a.name)} ${a.is_shared?'<span class="tag">общий</span>':(a.owner_name?`<span class="tag">${esc(a.owner_name)}</span>`:'')}</td>
+    <td><span class="tag">${esc((a.currency||'').toUpperCase())}</span></td>
+    <td class="mono t-num">${fmtNative(a.balance_native,a.currency)}</td>
+    <td class="mono t-num">${a.balance_rub!=null?fmtRub(a.balance_rub):'<span class="warn">нет курса</span>'}</td>
+    <td class="t-num">${fmtDate(a.as_of)}</td>
+  </tr>`).join('');
+  const foot = `<tr class="foot"><td colspan="3">Итого в рублях</td><td class="mono t-num">${fmtRub(D.consolidated_rub)}</td><td></td></tr>`;
+  const table = (D.accounts||[]).length
+    ? `<table><thead><tr><th>Счёт</th><th>Валюта</th><th class="t-right">Баланс</th><th class="t-right">В рублях</th><th class="t-right">Сверяли</th></tr></thead>
+        <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>`
+    : '<div class="panel-empty">Пока нет счетов — добавьте первый ниже.</div>';
+
+  const ownerOpts = ['<option value="">— общий —</option>']
+    .concat((D.users||[]).map(u=>`<option value="${esc(u.id)}">${esc(u.name)}</option>`)).join('');
+  const addForm = `<div class="panel"><div class="panel-head">Добавить счёт</div>
+    <form class="add" onsubmit="addAccount(event)">
+      <div class="f"><label>Название</label><input id="a-name" placeholder="Тинькофф ₽" required></div>
+      <div class="f"><label>Валюта</label><select id="a-cur">${CURRENCIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>
+      <div class="f"><label>Владелец</label><select id="a-owner">${ownerOpts}</select></div>
+      <div class="f chk"><input type="checkbox" id="a-shared" checked><label for="a-shared" style="text-transform:none">Общий</label></div>
+      <button class="btn" type="submit">Добавить</button>
+    </form></div>`;
+
+  root.innerHTML = hero + `<div class="panel"><div class="panel-head">Счета и сведение к рублю</div>${table}</div>` + addForm;
+}
+render();
+</script>
+</body>
+</html>

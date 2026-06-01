@@ -66,6 +66,20 @@ def test_rest_drift_unexplained_is_amber_and_routed(mock_supabase):
     assert any(t["kind"] == "drift" and "Карта" in t["label"] for t in me["todos"])
 
 
+def test_rest_drift_handles_null_actual_balance(mock_supabase):
+    # A corrupted snapshot with a null actual_balance must not 500 the page.
+    _base_tables(mock_supabase)
+    mock_supabase.tables["balance_snapshots"] = [
+        {"account_id": A, "actual_balance": None, "created_at": _iso(2)},
+        {"account_id": A, "actual_balance": "1000", "created_at": _iso(10)},
+    ]
+    mock_supabase.tables["transactions"] = []
+    out = FinanceService(None).data_health_via_rest("h1", "u1")  # must not raise
+    e = next(a for a in out["balances"]["accounts"] if a["account_id"] == A)
+    assert e["drift"] is None
+    assert e["drift_status"] == "green"
+
+
 def test_rest_drift_none_with_single_snapshot(mock_supabase):
     _base_tables(mock_supabase)
     mock_supabase.tables["balance_snapshots"] = [

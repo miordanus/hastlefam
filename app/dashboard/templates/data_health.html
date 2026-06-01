@@ -81,7 +81,10 @@ tr:last-child td { border-bottom:none; }
   <div class="h-brand"><span class="h-dot"></span><span class="h-name">HastleFam</span></div>
   <div class="h-right">
     <span class="h-meta" id="updated">—</span>
-    <a class="h-link" href="/finance/report?household_id={{ household_id or '' }}">Отчёт →</a>
+    <a class="h-link" href="/finance/report?household_id={{ household_id or '' }}">Отчёт</a>
+    <a class="h-link" href="/finance/planned?household_id={{ household_id or '' }}">Планы</a>
+    <a class="h-link" href="/finance/quality?household_id={{ household_id or '' }}">Качество</a>
+    <a class="h-link" href="/finance/accounts?household_id={{ household_id or '' }}">Счета</a>
     <a class="h-link" href="/auth/logout">Выйти</a>
   </div>
 </div></div>
@@ -108,6 +111,34 @@ const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':
 const fmtAmt = (a,c) => `${Number(a).toLocaleString('ru-RU')} ${String(c||'').toUpperCase()}`;
 const fmtDate = iso => { if(!iso) return '—'; try { return new Date(iso).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'}); } catch(e){ return '—'; } };
 const statusDot = s => `<span class="card-dot dot-${s}"></span>`;
+
+async function reconcile(accountId){
+  const acc = ((D && D.balances && D.balances.accounts) || []).find(a => String(a.account_id) === String(accountId));
+  if(!acc) return;
+  const name = acc.name || '';
+  const currency = String(acc.currency || '').toUpperCase();
+  const prefill = acc.last_balance != null ? String(acc.last_balance) : '';
+  const raw = window.prompt(`Текущий баланс по счёту «${name}» (${currency}):`, prefill);
+  if(raw == null) return; // отмена
+  const cleaned = raw.replace(/\s/g, '').replace(',', '.');
+  if(cleaned === '' || !isFinite(Number(cleaned))) return; // не число — ничего не делаем
+  try {
+    const resp = await fetch('/finance/balances', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ household_id: HID, account_id: accountId, actual_balance: cleaned }),
+    });
+    let data = null;
+    try { data = await resp.json(); } catch(e){ data = null; }
+    if(resp.ok && data && data.ok){
+      location.reload();
+    } else {
+      alert('Не удалось сохранить — ' + ((data && data.error) || resp.status));
+    }
+  } catch(e){
+    alert('Не удалось сохранить — ' + (e && e.message ? e.message : 'ошибка сети'));
+  }
+}
 
 function render(){
   const root = document.getElementById('root');
@@ -154,9 +185,10 @@ function render(){
     <td class="mono">${driftCell(a)}</td>
     <td class="t-num">${a.age_days==null?'ни разу':days(a.age_days)}</td>
     <td><span class="badge txt-${a.status}">${statusDot(a.status)}${a.status==='green'?'свежий':a.status==='amber'?'пора сверить':'устарел'}</span></td>
+    <td><a class="cta" href="#" onclick="reconcile('${esc(a.account_id)}');return false;">Сверить</a></td>
   </tr>`).join('');
   const accPanel = `<div class="panel"><div class="panel-head">Счета и сверка баланса</div>
-    ${(b.accounts||[]).length ? `<table><thead><tr><th>Счёт</th><th>Последний баланс</th><th>Расчётный баланс</th><th>Расхождение</th><th>Сверяли</th><th>Статус</th></tr></thead><tbody>${accRows}</tbody></table>`
+    ${(b.accounts||[]).length ? `<table><thead><tr><th>Счёт</th><th>Последний баланс</th><th>Расчётный баланс</th><th>Расхождение</th><th>Сверяли</th><th>Статус</th><th>Действие</th></tr></thead><tbody>${accRows}</tbody></table>`
       : '<div class="panel-empty">Нет активных счетов.</div>'}</div>`;
 
   // Sources table
@@ -171,7 +203,7 @@ function render(){
       : '<div class="panel-empty">Импортов пока не было.</div>'}</div>`;
 
   // Uncategorized list
-  const correctionsUrl = `/finance/corrections?household_id=${encodeURIComponent(HID)}&uncategorized=true`;
+  const correctionsUrl = `/finance/quality?household_id=${encodeURIComponent(HID)}`;
   const uItems = (u.items||[]).map(it => `<tr>
     <td class="t-num">${fmtDate(it.occurred_at)}</td>
     <td class="t-name">${esc(it.merchant) || 'операция'}</td>
@@ -194,7 +226,34 @@ function render(){
       : '<div class="person-done">✓ ничего не ждёт</div>'}
   </div>`).join('') + `</div>`;
 
-  root.innerHTML = `<div class="hero"><div class="hero-label">Состояние данных</div>${hero}</div>`
+  // ── "Сегодня" — clear-picture-today snapshot (#7)
+  const T = D.today || {};
+  const plannedUrl = `/finance/planned?household_id=${encodeURIComponent(HID)}`;
+  const qualityUrl = `/finance/quality?household_id=${encodeURIComponent(HID)}`;
+  const consol = (T.consolidated_rub!=null) ? fmtAmt(T.consolidated_rub,'rub') : '—';
+  const fxWarn = (T.fx_complete===false) ? ` <span class="card-sub" style="color:var(--yellow)">⚠ нет курса для части валют</span>` : '';
+  const lock = T.month_lock;
+  const lockTile = lock
+    ? `<div class="card"><div class="card-head">${statusDot('green')}<span class="card-label">Месяц</span></div>
+        <div class="card-num txt-green">🔒</div><div class="card-sub">закрыт ${fmtDate(lock.locked_at)}</div></div>`
+    : `<div class="card"><div class="card-head">${statusDot('amber')}<span class="card-label">Месяц</span></div>
+        <div class="card-num">○</div><div class="card-sub">не закрыт</div></div>`;
+  const todayHtml = `<div class="hero"><div class="hero-label">Сегодня</div>
+      <div class="hero-row"><span class="hero-num">${consol}</span><span class="hero-cap">на счетах сейчас${fxWarn}</span></div>
+    </div>
+    <div class="cards">
+      <a class="card" href="${plannedUrl}" style="text-decoration:none"><div class="card-head">${statusDot((T.overdue_count||0)>0?'red':'green')}<span class="card-label">Просрочено</span></div>
+        <div class="card-num txt-${(T.overdue_count||0)>0?'red':'green'}">${T.overdue_count||0}</div>
+        <div class="card-sub">${(T.overdue_rub)?fmtAmt(T.overdue_rub,'rub'):'нет просроченных планов'}</div></a>
+      <a class="card" href="${plannedUrl}" style="text-decoration:none"><div class="card-head">${statusDot('green')}<span class="card-label">Запланировано</span></div>
+        <div class="card-num">${T.upcoming_planned_count||0}</div><div class="card-sub">впереди по плану</div></a>
+      <a class="card" href="${qualityUrl}" style="text-decoration:none"><div class="card-head">${statusDot((T.untagged_count||0)>0?'amber':'green')}<span class="card-label">Без тега</span></div>
+        <div class="card-num txt-${(T.untagged_count||0)>0?'amber':'green'}">${T.untagged_count||0}</div><div class="card-sub">разметить теги</div></a>
+      ${lockTile}
+    </div>`;
+
+  root.innerHTML = todayHtml
+    + `<div class="hero-label" style="margin-top:6px">Состояние данных</div><div class="hero">${hero}</div>`
     + cards + accPanel + srcPanel + uPanel
     + `<div class="hero-label" style="margin-top:6px">Кому что разобрать</div>` + peopleHtml;
 }

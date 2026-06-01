@@ -419,3 +419,22 @@ class FxRate(Base):
     to_currency: Mapped[str] = mapped_column(String(10), nullable=False)
     rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class MonthLock(Base):
+    """Approve-and-lock a month (#6): snapshots the approved actual income/expense
+    totals (RUB) and freezes that month's transactions from edits while is_locked.
+    Unique on (household_id, month_key)."""
+    __tablename__ = "month_lock"
+    __table_args__ = (
+        UniqueConstraint("household_id", "month_key", name="uq_month_lock_household_month"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("households.id"), nullable=False)
+    month_key: Mapped[str] = mapped_column(String(7), nullable=False)  # 'YYYY-MM'
+    is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    income_rub: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    expense_rub: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    locked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    unlocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

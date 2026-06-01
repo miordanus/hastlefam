@@ -107,10 +107,20 @@ class _StubSupabase:
     def __init__(self):
         self.tables: dict[str, list[dict]] = {}
         self.get_calls: list[tuple[str, dict]] = []
+        self.patch_calls: list[tuple[str, dict, dict]] = []
+        self.post_calls: list[tuple[str, list]] = []
 
     def get(self, table, params=None):
         self.get_calls.append((table, dict(params or {})))
         return list(self.tables.get(table, []))
+
+    def patch(self, table, params, body):
+        self.patch_calls.append((table, dict(params or {}), dict(body or {})))
+        return []
+
+    def post(self, table, rows):
+        self.post_calls.append((table, list(rows)))
+        return list(rows)
 
     def rpc(self, name, params=None):
         # Not used by the methods under test, but stub it just in case.
