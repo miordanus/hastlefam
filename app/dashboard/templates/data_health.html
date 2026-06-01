@@ -124,7 +124,9 @@ function render(){
   const u = D.uncategorized, b = D.balances, im = D.imports;
   const uSub = u.count ? (u.oldest_days!=null ? `самая старая — ${days(u.oldest_days)}` : '') : 'всё с категориями';
   const bWorst = (b.accounts||[]).filter(a=>a.status!=='green').sort((x,y)=>(y.age_days??1e9)-(x.age_days??1e9))[0];
-  const bSub = bWorst ? `${esc(bWorst.name)}: ${bWorst.age_days==null?'ни разу не сверяли':days(bWorst.age_days)}` : 'все балансы свежие';
+  const bDrift = (b.accounts||[]).filter(a=>a.drift_status==='amber').length;
+  const bDriftSub = bDrift ? `${bDrift} ${plural(bDrift,'расхождение','расхождения','расхождений')} к разбору` : '';
+  const bSub = bWorst ? `${esc(bWorst.name)}: ${bWorst.age_days==null?'ни разу не сверяли':days(bWorst.age_days)}` : (bDriftSub || 'все балансы свежие');
   const iWorst = (im.sources||[]).filter(s=>s.status!=='green').sort((x,y)=>(y.age_days??0)-(x.age_days??0))[0];
   const iSub = iWorst ? `${esc(iWorst.source_name)}: ${days(iWorst.age_days)}` : ((im.sources||[]).length ? 'импорт свежий' : 'нет источников');
 
@@ -137,15 +139,24 @@ function render(){
       <div class="card-num txt-${im.status}">${(im.sources||[]).filter(s=>s.status!=='green').length}</div><div class="card-sub">${iSub}</div></div>
   </div>`;
 
-  // Accounts table
+  // Accounts table — drift ("расхождение") cell
+  const driftCell = a => {
+    if(a.drift==null) return '—';
+    if(a.drift_status==='green' && Math.abs(a.drift)<0.005)
+      return `<span class="badge txt-green">${statusDot('green')}✓ сходится</span>`;
+    const sign = a.drift>0 ? '+' : '';
+    return `<span class="badge txt-amber">${statusDot('amber')}${sign}${fmtAmt(a.drift,a.currency)}</span>`;
+  };
   const accRows = (b.accounts||[]).map(a => `<tr>
     <td class="t-name">${esc(a.name)}</td>
     <td class="t-num mono">${a.last_balance!=null?fmtAmt(a.last_balance,a.currency):'—'}</td>
+    <td class="t-num mono">${a.computed_balance!=null?fmtAmt(a.computed_balance,a.currency):'—'}</td>
+    <td class="mono">${driftCell(a)}</td>
     <td class="t-num">${a.age_days==null?'ни разу':days(a.age_days)}</td>
     <td><span class="badge txt-${a.status}">${statusDot(a.status)}${a.status==='green'?'свежий':a.status==='amber'?'пора сверить':'устарел'}</span></td>
   </tr>`).join('');
   const accPanel = `<div class="panel"><div class="panel-head">Счета и сверка баланса</div>
-    ${(b.accounts||[]).length ? `<table><thead><tr><th>Счёт</th><th>Последний баланс</th><th>Сверяли</th><th>Статус</th></tr></thead><tbody>${accRows}</tbody></table>`
+    ${(b.accounts||[]).length ? `<table><thead><tr><th>Счёт</th><th>Последний баланс</th><th>Расчётный баланс</th><th>Расхождение</th><th>Сверяли</th><th>Статус</th></tr></thead><tbody>${accRows}</tbody></table>`
       : '<div class="panel-empty">Нет активных счетов.</div>'}</div>`;
 
   // Sources table
@@ -176,7 +187,7 @@ function render(){
   // Per-person to-do — logged-in user first (is_you), then partner(s), then shared
   const cols = [...(D.people||[]).map(p=>({title: p.is_you ? `Ты${p.name?` · ${p.name}`:''}` : p.name, you:!!p.is_you, todos:p.todos})),
                 {title:'Общие', you:false, todos:D.unassigned||[]}];
-  const kindLabel = k => k==='uncategorized'?'категория':k==='balance'?'баланс':k;
+  const kindLabel = k => k==='uncategorized'?'категория':k==='balance'?'баланс':k==='drift'?'расхождение':k;
   const peopleHtml = `<div class="people">` + cols.map(p => `<div class="person"${p.you?' style="border-color:var(--accent)"':''}>
     <div class="person-head"><span class="person-name">${esc(p.title)}</span><span class="person-count">${p.todos.length}</span></div>
     ${p.todos.length ? p.todos.slice(0,20).map(t=>`<div class="todo"><span class="todo-kind">${kindLabel(t.kind)}</span><span class="todo-label">${esc(t.label)}</span></div>`).join('')

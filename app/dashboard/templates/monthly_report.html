@@ -218,6 +218,62 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
 .panel-close { position:absolute; top:14px; right:14px; background:none; border:none; color:var(--muted); font-size:22px; cursor:pointer; line-height:1; font-family:inherit; }
 .panel-field { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--surface2); font-size:13px; }
 
+/* ── Edit panel / modal forms ─────────────────────────────────────────── */
+.form-field { display:flex; flex-direction:column; gap:5px; margin-bottom:12px; }
+.form-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; }
+.form-input, .form-select {
+  background:var(--surface2); border:1px solid var(--border); border-radius:6px;
+  color:var(--text); font-size:13px; padding:8px 10px; font-family:inherit; width:100%;
+}
+.form-input:focus, .form-select:focus { outline:none; border-color:var(--accent); }
+.form-input.mono { font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; }
+.form-row2 { display:flex; gap:10px; }
+.form-row2 > * { flex:1; min-width:0; }
+.btn-primary {
+  background:var(--accent); border:none; color:#fff; font-size:13px; font-weight:500;
+  padding:9px 16px; border-radius:6px; cursor:pointer; font-family:inherit;
+}
+.btn-primary:hover { background:#5457e0; }
+.btn-ghost {
+  background:var(--surface2); border:1px solid var(--border); color:var(--muted);
+  font-size:13px; padding:9px 16px; border-radius:6px; cursor:pointer; font-family:inherit;
+}
+.btn-ghost:hover { color:var(--text); }
+.panel-edit-btn {
+  background:var(--surface2); border:1px solid var(--border); color:var(--accent);
+  font-size:12px; padding:5px 12px; border-radius:6px; cursor:pointer; font-family:inherit; margin-top:14px;
+}
+.panel-edit-btn:hover { border-color:var(--accent); }
+
+/* ── Modal (add transaction) ──────────────────────────────────────────── */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.55); opacity:0; pointer-events:none; transition:opacity .2s; z-index:110; display:flex; align-items:center; justify-content:center; padding:20px; }
+.modal-overlay.open { opacity:1; pointer-events:auto; }
+.modal { background:var(--surface); border:1px solid var(--border); border-radius:14px; width:100%; max-width:420px; max-height:90vh; overflow-y:auto; padding:22px 24px; position:relative; animation:fadeIn .2s ease; }
+.modal-title { font-size:16px; font-weight:600; margin-bottom:16px; }
+.modal-close { position:absolute; top:14px; right:16px; background:none; border:none; color:var(--muted); font-size:22px; cursor:pointer; line-height:1; font-family:inherit; }
+.modal-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:8px; }
+
+/* ── Ledger add button + tag filter chip ──────────────────────────────── */
+.ledger-add-btn { margin-left:auto; background:var(--accent); border:none; color:#fff; font-size:12px; font-weight:500; padding:5px 12px; border-radius:6px; cursor:pointer; font-family:inherit; }
+.ledger-add-btn:hover { background:#5457e0; }
+.ledger-tag-chip { display:inline-flex; align-items:center; gap:6px; background:rgba(99,102,241,0.16); border:1px solid rgba(99,102,241,0.4); color:var(--accent); font-size:12px; padding:3px 6px 3px 10px; border-radius:14px; }
+.ledger-tag-chip button { background:none; border:none; color:var(--accent); cursor:pointer; font-size:14px; line-height:1; padding:0 2px; font-family:inherit; }
+
+/* ── Budgets panel ────────────────────────────────────────────────────── */
+.bd-head { cursor:pointer; }
+.bd-row { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--surface2); }
+.bd-name { flex:0 0 130px; display:flex; align-items:center; gap:7px; overflow:hidden; }
+.bd-tag-name { font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bd-bar-cell { flex:1; min-width:0; }
+.bd-bar-bg { height:6px; background:#1f1f23; border-radius:3px; overflow:hidden; }
+.bd-bar-fill { height:100%; border-radius:3px; transition:width .4s ease; }
+.bd-spent { width:140px; text-align:right; font-size:12px; color:#a1a1aa; font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; }
+.bd-limit-input { width:90px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px; padding:4px 8px; font-family:'JetBrains Mono',monospace; text-align:right; }
+.bd-limit-input:focus { outline:none; border-color:var(--accent); }
+.bd-save-btn { background:var(--surface2); border:1px solid var(--border); color:var(--accent); font-size:11px; padding:4px 9px; border-radius:6px; cursor:pointer; font-family:inherit; }
+.bd-save-btn:hover { border-color:var(--accent); }
+.bd-add { display:flex; gap:8px; padding:12px 16px; align-items:center; flex-wrap:wrap; }
+
 /* ── Mobile ───────────────────────────────────────────────────────────── */
 @media (max-width:640px) {
   .h-tabs { gap:0; }
@@ -402,6 +458,14 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
       <div id="ta-rows"></div>
     </div>
 
+    <div class="cardv" id="budgets-card">
+      <div class="cardv-head bd-head" onclick="toggleBudgets()">
+        <span class="cardv-title">Бюджеты</span>
+        <button class="alerts-toggle" id="bd-toggle">Свернуть ↑</button>
+      </div>
+      <div id="budgets-body"></div>
+    </div>
+
     <section>
       <div class="sec-head">
         <span class="sec-title">Транзакции</span>
@@ -423,6 +487,8 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
             <option value="mismatch">Расхождение</option>
             <option value="unplanned">Сюрприз</option>
           </select>
+          <span class="ledger-tag-chip" id="ledger-tag-chip" style="display:none"></span>
+          <button class="ledger-add-btn" id="ledger-add-btn" onclick="openTxModal()">＋ Добавить</button>
         </div>
         <div class="ledger-wrap">
           <table class="ledger-table">
@@ -552,8 +618,54 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
   <h2 id="panel-merchant" style="font-size:17px;font-weight:600;line-height:1.3;"></h2>
   <div id="panel-amount" class="mono" style="font-size:32px;font-weight:700;margin:18px 0 24px;"></div>
   <div id="panel-fields"></div>
+  <div id="panel-edit"></div>
   <div id="panel-alert" style="margin-top:18px"></div>
 </aside>
+
+<!-- Add-transaction modal -->
+<div class="modal-overlay" id="tx-modal-overlay" onclick="if(event.target===this)closeTxModal()">
+  <div class="modal" role="dialog" aria-modal="true">
+    <button class="modal-close" onclick="closeTxModal()">×</button>
+    <div class="modal-title">Новая транзакция</div>
+    <div class="form-row2">
+      <div class="form-field">
+        <label class="form-label">Сумма</label>
+        <input class="form-input mono" id="tm-amount" type="number" step="0.01" inputmode="decimal" placeholder="0">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Валюта</label>
+        <select class="form-select" id="tm-currency"></select>
+      </div>
+    </div>
+    <div class="form-row2">
+      <div class="form-field">
+        <label class="form-label">Направление</label>
+        <select class="form-select" id="tm-direction"></select>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Дата</label>
+        <input class="form-input mono" id="tm-date" type="date">
+      </div>
+    </div>
+    <div class="form-field">
+      <label class="form-label">Счёт</label>
+      <select class="form-select" id="tm-account"></select>
+    </div>
+    <div class="form-field">
+      <label class="form-label">Тег</label>
+      <input class="form-input" id="tm-tag" type="text" list="tag-suggest" placeholder="напр. еда">
+    </div>
+    <div class="form-field">
+      <label class="form-label">Описание (необязательно)</label>
+      <input class="form-input" id="tm-merchant" type="text" placeholder="">
+    </div>
+    <datalist id="tag-suggest"></datalist>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeTxModal()">Отмена</button>
+      <button class="btn-primary" id="tm-save" onclick="submitTxModal()">Создать</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ════════════════════════════════════════════════════════════════════════════
@@ -681,6 +793,16 @@ function tagColor(tag) {
 }
 function tagLabel(tag) {
   return tag === '(без тега)' ? 'без тега' : tag;
+}
+
+// ── Editing helpers (shared by edit panel / add modal / budgets) ──────────
+const CURRENCIES = ['RUB','USD','USDT','EUR','AMD'];
+const DIRECTIONS = [['expense','Расход'],['income','Доход'],['exchange','Обмен'],['transfer','Перевод']];
+function _monthKey() { return `${_REPORT_YEAR}-${String(_REPORT_MONTH).padStart(2,'0')}`; }
+function existingTags() {
+  const set = new Set();
+  _TXS.forEach(t => { if (t.primary_tag && t.primary_tag !== '(без тега)') set.add(t.primary_tag); });
+  return [...set].sort((a,b) => a.localeCompare(b,'ru'));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1177,10 +1299,11 @@ function renderTagAnalytics() {
     const barPct = t.total_rub / maxVal;
     const change = t.prev_rub ? (t.total_rub - t.prev_rub) / t.prev_rub * 100 : null;
     const changeColor = change === null ? 'var(--border2)' : change > 10 ? 'var(--red)' : change < -10 ? 'var(--green)' : 'var(--muted)';
-    return `<div class="ta-row">
+    const isActive = currentFilter.tag === t.tag;
+    return `<div class="ta-row" style="cursor:pointer;${isActive?'background:#1c1c22':''}" onclick="filterByTag('${esc(t.tag).replace(/'/g,"\\'")}')">
       <div class="ta-name-cell">
         <span class="ta-tag-dot" style="background:${tagColor(t.tag)}"></span>
-        <span class="ta-tag-name">${tagLabel(t.tag)}</span>
+        <span class="ta-tag-name">${tagLabel(t.tag)}${isActive?' <span style="font-size:9px;color:var(--accent)">●</span>':''}</span>
       </div>
       <div class="ta-bar-cell"><div class="ta-bar-bg"><div class="ta-bar-fill" style="width:${barPct*100}%;background:${tagColor(t.tag)}aa"></div></div></div>
       <div class="ta-amt-cell mono">${fmtC(t.total_rub, true)}</div>
@@ -1203,7 +1326,7 @@ function renderTagAnalytics() {
       <div class="ta-change-cell">—</div>
     </div>`;
     if (_otherExpanded) {
-      otherHtml += minor.map(t => `<div class="ta-row other-sub">
+      otherHtml += minor.map(t => `<div class="ta-row other-sub" style="cursor:pointer" onclick="filterByTag('${esc(t.tag).replace(/'/g,"\\'")}')">
         <div class="ta-name-cell">
           <span class="ta-tag-dot" style="width:6px;height:6px;background:${tagColor(t.tag)}"></span>
           <span class="ta-tag-name" style="font-size:12px;color:var(--muted)">${tagLabel(t.tag)}</span>
@@ -1220,13 +1343,139 @@ function renderTagAnalytics() {
 function toggleOther() { _otherExpanded = !_otherExpanded; renderTagAnalytics(); }
 
 // ════════════════════════════════════════════════════════════════════════════
+// BUDGETS PANEL
+// ════════════════════════════════════════════════════════════════════════════
+let _budgetsExpanded = true;
+let _budgetsLoaded = false;
+const BD_STATUS_COLOR = { ok:'var(--green)', at_risk:'var(--yellow)', over_budget:'var(--red)' };
+const BD_STATUS_LABEL = { ok:'в норме', at_risk:'на грани', over_budget:'превышен' };
+
+function toggleBudgets() {
+  _budgetsExpanded = !_budgetsExpanded;
+  document.getElementById('budgets-body').style.display = _budgetsExpanded ? '' : 'none';
+  document.getElementById('bd-toggle').textContent = _budgetsExpanded ? 'Свернуть ↑' : 'Развернуть ↓';
+}
+
+async function loadBudgets() {
+  if (!HOUSEHOLD_ID) return;
+  const body = document.getElementById('budgets-body');
+  body.innerHTML = '<div style="padding:18px 16px;color:var(--muted);font-size:13px;">Загрузка…</div>';
+  try {
+    const url = new URL('/finance/budgets', location.origin);
+    url.searchParams.set('household_id', HOUSEHOLD_ID);
+    url.searchParams.set('month', _monthKey());
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const j = await resp.json();
+    renderBudgets(j.budgets || []);
+  } catch (e) {
+    body.innerHTML = `<div style="padding:18px 16px;color:var(--red);font-size:13px;">Не удалось загрузить бюджеты: ${esc(e.message)}</div>`;
+  }
+  _budgetsLoaded = true;
+}
+
+function renderBudgets(budgets) {
+  const body = document.getElementById('budgets-body');
+  const rows = budgets.map(b => {
+    const color = BD_STATUS_COLOR[b.status] || 'var(--muted)';
+    const limit = Number(b.effective_limit ?? b.limit_amount ?? 0);
+    const spent = Number(b.actual_spent ?? 0);
+    const pct = (b.pct_used != null) ? Number(b.pct_used) : (limit > 0 ? spent / limit * 100 : 0);
+    const barPct = Math.min(100, Math.max(0, pct));
+    const cur = (b.currency || 'rub').toUpperCase();
+    const fmt = v => Math.round(v).toLocaleString('ru-RU');
+    return `<div class="bd-row" data-tag="${esc(b.tag)}">
+      <div class="bd-name">
+        <span class="ta-tag-dot" style="background:${tagColor(b.tag)}"></span>
+        <span class="bd-tag-name" title="${esc(b.tag)} — ${BD_STATUS_LABEL[b.status]||''}">${esc(tagLabel(b.tag))}</span>
+      </div>
+      <div class="bd-bar-cell">
+        <div class="bd-bar-bg"><div class="bd-bar-fill" style="width:${barPct}%;background:${color}"></div></div>
+      </div>
+      <div class="bd-spent mono">${fmt(spent)} / ${fmt(limit)} ${cur}</div>
+      <input class="bd-limit-input mono" type="number" step="1" min="0" value="${Number(b.limit_amount ?? 0)}" data-tag="${esc(b.tag)}" data-cur="${cur}">
+      <button class="bd-save-btn" onclick="saveBudget('${esc(b.tag).replace(/'/g,"\\'")}', this)">Сохранить</button>
+    </div>`;
+  }).join('');
+
+  const tagOpts = existingTags().map(t => `<option value="${esc(t)}">`).join('');
+  const empty = budgets.length ? '' : '<div style="padding:14px 16px;color:var(--subtle);font-size:13px;">Бюджеты не заданы</div>';
+  body.innerHTML = `
+    ${empty}${rows}
+    <div class="bd-add">
+      <input class="form-input" id="bd-new-tag" type="text" list="bd-tag-suggest" placeholder="тег" style="flex:0 0 140px">
+      <input class="bd-limit-input mono" id="bd-new-limit" type="number" step="1" min="0" placeholder="лимит" style="width:110px">
+      <button class="btn-primary" id="bd-add-btn" onclick="addBudget()" style="padding:6px 14px;font-size:12px">＋ добавить бюджет</button>
+      <datalist id="bd-tag-suggest">${tagOpts}</datalist>
+    </div>`;
+}
+
+async function _upsertBudget(tag, limit, cur, btn) {
+  if (!HOUSEHOLD_ID) return false;
+  if (!tag) { alert('Укажите тег'); return false; }
+  if (isNaN(limit) || limit < 0) { alert('Укажите лимит'); return false; }
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const resp = await fetch('/finance/budgets', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({
+        household_id: HOUSEHOLD_ID, month_key: _monthKey(),
+        tag: tag, limit_amount: limit, currency: (cur || 'RUB'),
+      }),
+    });
+    if (!resp.ok) { alert('Не удалось — ' + resp.status); if(btn){btn.disabled=false;btn.textContent=orig;} return false; }
+    return true;
+  } catch (e) {
+    alert('Ошибка: ' + e.message); if(btn){btn.disabled=false;btn.textContent=orig;} return false;
+  }
+}
+
+async function saveBudget(tag, btn) {
+  const row = btn.closest('.bd-row');
+  const input = row ? row.querySelector('.bd-limit-input') : null;
+  const limit = input ? parseFloat(input.value) : NaN;
+  const cur = input ? input.dataset.cur : 'RUB';
+  if (await _upsertBudget(tag, limit, cur, btn)) loadBudgets();
+}
+
+async function addBudget() {
+  const tag = document.getElementById('bd-new-tag').value.trim().toLowerCase();
+  const limit = parseFloat(document.getElementById('bd-new-limit').value);
+  const btn = document.getElementById('bd-add-btn');
+  if (await _upsertBudget(tag, limit, 'RUB', btn)) loadBudgets();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // LEDGER + SIDE PANEL
 // ════════════════════════════════════════════════════════════════════════════
-const currentFilter = { view:'all', account:'all', status:'all' };
+const currentFilter = { view:'all', account:'all', status:'all', tag:null };
 
 function renderLedgerFilters() {
   const sel = document.getElementById('filter-account');
   sel.innerHTML = '<option value="all">Все счета</option>' + ACCOUNTS.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+}
+
+// Tag drill-down: set/toggle the ledger tag filter from the Tag Analytics table.
+function filterByTag(tag) {
+  currentFilter.tag = (currentFilter.tag === tag) ? null : tag;
+  renderTagAnalytics();
+  renderLedger();
+  if (currentFilter.tag) {
+    document.querySelector('section .sec-head')?.scrollIntoView({ behavior:'smooth', block:'start' });
+  }
+}
+function clearTagFilter() { currentFilter.tag = null; renderTagAnalytics(); renderLedger(); }
+function _renderTagChip() {
+  const chip = document.getElementById('ledger-tag-chip');
+  if (!chip) return;
+  if (currentFilter.tag) {
+    chip.style.display = '';
+    chip.innerHTML = `#${esc(tagLabel(currentFilter.tag))}<button title="сбросить" onclick="clearTagFilter()">×</button>`;
+  } else {
+    chip.style.display = 'none';
+    chip.innerHTML = '';
+  }
 }
 
 function renderLedger() {
@@ -1235,8 +1484,10 @@ function renderLedger() {
     if (currentFilter.view === 'planned' && !tx.is_planned) return false;
     if (currentFilter.account !== 'all' && tx.account_id !== currentFilter.account) return false;
     if (currentFilter.status !== 'all' && tx.status !== currentFilter.status) return false;
+    if (currentFilter.tag && tx.primary_tag !== currentFilter.tag) return false;
     return true;
   });
+  _renderTagChip();
   document.getElementById('ledger-sub').textContent = `${filtered.length} записей · ${MONTHS_FULL[_REPORT_MONTH]} ${_REPORT_YEAR}`;
   const body = document.getElementById('ledger-body');
   const empty = document.getElementById('ledger-empty');
@@ -1309,12 +1560,151 @@ function openPanel(id) {
     </div>`;
   }
   document.getElementById('panel-alert').innerHTML = alertHtml;
+  document.getElementById('panel-edit').innerHTML =
+    `<button class="panel-edit-btn" onclick="renderEditForm('${tx.id}')">✎ Изменить</button>`;
   document.getElementById('side-panel').classList.add('open');
   document.getElementById('overlay').classList.add('open');
 }
 function closePanel() {
   document.getElementById('side-panel').classList.remove('open');
   document.getElementById('overlay').classList.remove('open');
+}
+
+// ── Edit transaction (reveals inputs in the detail panel) ─────────────────
+function renderEditForm(id) {
+  const tx = LEDGER.find(t => t.id === id);
+  if (!tx) return;
+  const curUp = (tx.currency || 'rub').toUpperCase();
+  const curVal = curUp === 'USD' ? 'USD' : curUp; // _normCur folds usdt→usd for display; keep what we have
+  const accOpts = ACCOUNTS.map(a => `<option value="${a.id}" ${a.id===tx.account_id?'selected':''}>${esc(a.name)}</option>`).join('');
+  const curOpts = CURRENCIES.map(c => `<option value="${c}" ${c===curUp?'selected':''}>${c}</option>`).join('');
+  const dirOpts = DIRECTIONS.map(([v,l]) => `<option value="${v}" ${v===tx.direction?'selected':''}>${l}</option>`).join('');
+  document.getElementById('panel-edit').innerHTML = `
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--surface2)">
+      <div class="form-row2">
+        <div class="form-field">
+          <label class="form-label">Сумма</label>
+          <input class="form-input mono" id="ed-amount" type="number" step="0.01" value="${tx.amount}">
+        </div>
+        <div class="form-field">
+          <label class="form-label">Валюта</label>
+          <select class="form-select" id="ed-currency">${curOpts}</select>
+        </div>
+      </div>
+      <div class="form-row2">
+        <div class="form-field">
+          <label class="form-label">Направление</label>
+          <select class="form-select" id="ed-direction">${dirOpts}</select>
+        </div>
+        <div class="form-field">
+          <label class="form-label">Дата</label>
+          <input class="form-input mono" id="ed-date" type="date" value="${(tx.occurred_at||'').slice(0,10)}">
+        </div>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Счёт</label>
+        <select class="form-select" id="ed-account">${accOpts}</select>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Тег</label>
+        <input class="form-input" id="ed-tag" type="text" list="tag-suggest" value="${esc(tx.primary_tag || '')}">
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="openPanel('${tx.id}')">Отмена</button>
+        <button class="btn-primary" id="ed-save" onclick="saveTxEdit('${tx.id}')">Сохранить</button>
+      </div>
+    </div>`;
+  _fillTagSuggest();
+}
+
+async function saveTxEdit(id) {
+  const tx = LEDGER.find(t => t.id === id);
+  if (!tx) return;
+  const body = {};
+  const amount = parseFloat(document.getElementById('ed-amount').value);
+  if (!isNaN(amount) && amount !== Number(tx.amount)) body.amount = amount;
+  const cur = document.getElementById('ed-currency').value;
+  if (cur && cur !== (tx.currency || '').toUpperCase()) body.currency = cur;
+  const dir = document.getElementById('ed-direction').value;
+  if (dir && dir !== tx.direction) body.direction = dir;
+  const date = document.getElementById('ed-date').value;
+  if (date && date !== (tx.occurred_at || '').slice(0,10)) body.occurred_at = date;
+  const tag = document.getElementById('ed-tag').value.trim();
+  if (tag !== (tx.primary_tag || '')) body.primary_tag = tag;
+  const acc = document.getElementById('ed-account').value;
+  if (acc && acc !== tx.account_id) body.account_id = acc;
+
+  if (Object.keys(body).length === 0) { closePanel(); return; }
+  const btn = document.getElementById('ed-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Сохранение…'; }
+  try {
+    const resp = await fetch(`/finance/transactions/${id}/edit`, {
+      method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body),
+    });
+    if (!resp.ok) { alert('Не удалось — ' + resp.status); if(btn){btn.disabled=false;btn.textContent='Сохранить';} return; }
+    setTimeout(() => location.reload(), 200);
+  } catch (e) { alert('Ошибка: ' + e.message); if(btn){btn.disabled=false;btn.textContent='Сохранить';} }
+}
+
+function _fillTagSuggest() {
+  const dl = document.getElementById('tag-suggest');
+  if (dl) dl.innerHTML = existingTags().map(t => `<option value="${esc(t)}">`).join('');
+}
+
+// ── Add transaction (modal) ───────────────────────────────────────────────
+let _txModalInit = false;
+function openTxModal() {
+  if (!_txModalInit) {
+    document.getElementById('tm-currency').innerHTML = CURRENCIES.map(c => `<option value="${c}">${c}</option>`).join('');
+    document.getElementById('tm-direction').innerHTML = DIRECTIONS.map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+    document.getElementById('tm-account').innerHTML =
+      '<option value="">— без счёта —</option>' + ACCOUNTS.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+    _txModalInit = true;
+  }
+  // Reset fields each open.
+  document.getElementById('tm-amount').value = '';
+  document.getElementById('tm-currency').value = 'RUB';
+  document.getElementById('tm-direction').value = 'expense';
+  document.getElementById('tm-date').value = (_IS_CURRENT_MONTH || _isFutureMonth)
+    ? TODAY
+    : `${_monthKey()}-01`;
+  document.getElementById('tm-account').value = ACCOUNTS[0] ? ACCOUNTS[0].id : '';
+  document.getElementById('tm-tag').value = currentFilter.tag || '';
+  document.getElementById('tm-merchant').value = '';
+  _fillTagSuggest();
+  document.getElementById('tx-modal-overlay').classList.add('open');
+  document.getElementById('tm-amount').focus();
+}
+function closeTxModal() { document.getElementById('tx-modal-overlay').classList.remove('open'); }
+
+async function submitTxModal() {
+  const amount = parseFloat(document.getElementById('tm-amount').value);
+  if (isNaN(amount) || amount === 0) { alert('Укажите сумму'); return; }
+  const date = document.getElementById('tm-date').value;
+  if (!date) { alert('Укажите дату'); return; }
+  const tag = document.getElementById('tm-tag').value.trim();
+  const acc = document.getElementById('tm-account').value;
+  const merchant = document.getElementById('tm-merchant').value.trim();
+  const body = {
+    household_id: HOUSEHOLD_ID,
+    amount: amount,
+    currency: document.getElementById('tm-currency').value,
+    direction: document.getElementById('tm-direction').value,
+    occurred_at: date,
+  };
+  if (tag) body.primary_tag = tag;
+  if (acc) body.account_id = acc;
+  if (merchant) body.merchant = merchant;
+
+  const btn = document.getElementById('tm-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Создание…'; }
+  try {
+    const resp = await fetch('/finance/transactions', {
+      method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body),
+    });
+    if (!resp.ok) { alert('Не удалось — ' + resp.status); if(btn){btn.disabled=false;btn.textContent='Создать';} return; }
+    setTimeout(() => location.reload(), 200);
+  } catch (e) { alert('Ошибка: ' + e.message); if(btn){btn.disabled=false;btn.textContent='Создать';} }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1728,7 +2118,7 @@ function updatePeriodLabel() {
 }
 
 function renderActiveTab() {
-  if (activeTab === 'monthly')   { renderHero(); renderAccounts(); renderStats(); renderAlerts(); renderIncome(); renderCashflowChart(); renderTagAnalytics(); renderLedger(); }
+  if (activeTab === 'monthly')   { renderHero(); renderAccounts(); renderStats(); renderAlerts(); renderIncome(); renderCashflowChart(); renderTagAnalytics(); renderLedger(); if (!_budgetsLoaded) loadBudgets(); }
   else if (activeTab === 'quarterly') renderQuarterly();
   else if (activeTab === 'yearly')    renderYearly();
   else if (activeTab === 'annual')    renderAnnual();

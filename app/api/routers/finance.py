@@ -8,7 +8,13 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.schemas.finance import SQLImportRequest, TransactionCorrectionUpdate
+from app.api.schemas.finance import (
+    BudgetUpsert,
+    SQLImportRequest,
+    TransactionCorrectionUpdate,
+    TransactionCreate,
+    TransactionUpdate,
+)
 from app.application.services.finance_service import FinanceService
 from app.application.services.import_service import ImportService
 from app.infrastructure.config.settings import get_settings
@@ -18,6 +24,14 @@ from app.infrastructure.db.models import FinanceCategory, RecurringPayment, Tran
 def _use_rest() -> bool:
     s = get_settings()
     return bool(s.supabase_url and s.supabase_service_role_key)
+
+
+def _as_dt_iso(d) -> str:
+    """A date → midnight-UTC ISO datetime string for PostgREST writes."""
+    import datetime as _dt
+    if isinstance(d, _dt.datetime):
+        return d.isoformat()
+    return _dt.datetime(d.year, d.month, d.day, tzinfo=_dt.timezone.utc).isoformat()
 
 
 def _run_monthly_report(db: Session, household_id: str, year: int, month: int) -> dict:
@@ -270,6 +284,111 @@ def update_correction(
         url=f"/finance/corrections?household_id={household_id}&uncategorized={str(uncategorized).lower()}",
         status_code=303,
     )
+
+
+@router.post("/transactions")
+def create_transaction(body: TransactionCreate, db: Session = Depends(get_db)) -> dict:
+    """Add a transaction from the web UI. REST write on Vercel, else SQLAlchemy."""
+    if _use_rest():
+        import uuid as _u
+
+        from app.domain.enums import Currency, TransactionDirection
+        s = get_settings()
+        tx_id = str(_u.uuid4())
+        occ = _as_dt_iso(body.occurred_at)
+        cur = Currency(body.currency).value
+        dir_ = TransactionDirection(body.direction).value
+        tag = FinanceService._clean_tag(body.primary_tag)
+        fp = FinanceService._web_fingerprint(
+            body.household_id, body.amount, cur, body.merchant, body.occurred_at.isoformat(), dir_
+        )
+        row = {
+            "id": tx_id,
+            "household_id": body.household_id,
+            "user_id": body.user_id,
+            "account_id": body.account_id,
+            "direction": dir_,
+            "amount": float(body.amount),
+            "currency": cur,
+            "occurred_at": occ,
+            "merchant_raw": body.merchant,
+            "source": "web",
+            "parse_status": "ok",
+            "primary_tag": tag,
+            "extra_tags": [],
+            "is_planned": body.is_planned,
+            "is_internal_transfer": False,
+            "is_skipped": False,
+            "dedup_fingerprint": fp,
+        }
+        from app.infrastructure.supabase import SupabaseClient
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            sb.post("transactions", [row])
+        return {"ok": True, "id": tx_id}
+
+    tx = FinanceService(db).create_transaction(
+        household_id=body.household_id, amount=body.amount, currency=body.currency,
+        direction=body.direction, occurred_at=body.occurred_at, primary_tag=body.primary_tag,
+        account_id=body.account_id, merchant=body.merchant, user_id=body.user_id,
+        is_planned=body.is_planned,
+    )
+    return {"ok": True, "id": str(tx.id)}
+
+
+@router.post("/transactions/{tx_id}/edit")
+def edit_transaction(tx_id: str, body: TransactionUpdate, db: Session = Depends(get_db)) -> dict:
+    """Edit a transaction's fields from the web UI. REST or SQLAlchemy."""
+    fields = body.model_dump(exclude_unset=True)
+    if _use_rest():
+        from app.domain.enums import Currency, TransactionDirection
+        patch: dict = {}
+        if "amount" in fields and fields["amount"] is not None:
+            patch["amount"] = float(fields["amount"])
+        if fields.get("currency"):
+            patch["currency"] = Currency(fields["currency"]).value
+        if fields.get("direction"):
+            patch["direction"] = TransactionDirection(fields["direction"]).value
+        if fields.get("occurred_at"):
+            patch["occurred_at"] = _as_dt_iso(fields["occurred_at"])
+        if "primary_tag" in fields:
+            patch["primary_tag"] = FinanceService._clean_tag(fields["primary_tag"])
+        if fields.get("account_id"):
+            patch["account_id"] = fields["account_id"]
+        if fields.get("merchant") is not None:
+            patch["merchant_raw"] = fields["merchant"]
+        if not patch:
+            return {"ok": True, "tx_id": tx_id, "unchanged": True}
+        from app.infrastructure.supabase import SupabaseClient
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            sb.patch("transactions", {"id": f"eq.{tx_id}"}, patch)
+        return {"ok": True, "tx_id": tx_id}
+
+    tx = FinanceService(db).update_transaction(tx_id, **fields)
+    if tx is None:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    return {"ok": True, "tx_id": tx_id}
+
+
+@router.get("/budgets")
+def list_budgets(
+    household_id: str = Query(...),
+    month: str = Query(..., description="YYYY-MM"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Per-tag budget status (limit / spent / remaining) for the month."""
+    from app.application.services.budget_service import get_budget_status
+    return {"budgets": get_budget_status(household_id, month, db)}
+
+
+@router.post("/budgets")
+def upsert_budget(body: BudgetUpsert, db: Session = Depends(get_db)) -> dict:
+    """Create or update a per-tag monthly budget limit."""
+    b = FinanceService(db).upsert_tag_budget(
+        body.household_id, body.month_key, body.tag, body.limit_amount,
+        currency=body.currency, rollover_enabled=body.rollover_enabled,
+    )
+    return {"ok": True, "id": str(b.id), "tag": b.tag, "limit_amount": float(b.limit_amount)}
 
 
 @router.get("/category_movers")
