@@ -59,6 +59,20 @@ def _worst(statuses: list[str]) -> str:
     return "green"
 
 
+DRIFT_EPS = 0.01  # |drift| at or below this is treated as fully reconciled
+
+
+def _drift_status(drift: float | None) -> str:
+    """Reconciliation status from the unexplained balance drift.
+
+    None (fewer than two snapshots → nothing to reconcile yet) and a near-zero
+    drift are both green; any other unexplained difference is amber.
+    """
+    if drift is None:
+        return "green"
+    return "green" if abs(drift) <= DRIFT_EPS else "amber"
+
+
 # ─── REST-mode FX helpers (per-date conversion) ──────────────────────────────
 # Used by the *_via_rest service methods. Mirror fx_service.convert_to_rub
 # semantics (date-aware, 7-day backward fallback) but operate over
@@ -470,20 +484,19 @@ class FinanceService:
         household_id: str,
         new_balance: Decimal,
         user_id: str | None = None,
-    ) -> tuple[BalanceSnapshot, Transaction | None]:
-        """Save new balance snapshot; create a delta transaction visible in /inbox."""
+    ) -> tuple[BalanceSnapshot, None]:
+        """Save a new balance snapshot.
+
+        Records only the snapshot. The discrepancy versus the balance implied by
+        transactions is derived on the fly as reconciliation drift in
+        data_health() — we no longer mint a fixed «корректировка» transaction
+        (it never updated when a past-dated expense was added later). The second
+        tuple element stays for backward compatibility and is always None.
+        """
         import uuid as _u
         aid = _uuid.UUID(account_id) if isinstance(account_id, str) else account_id
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
         uid = _uuid.UUID(user_id) if user_id else None
-
-        acc = self.db.query(Account).filter(Account.id == aid).first()
-        prev = (
-            self.db.query(BalanceSnapshot)
-            .filter(BalanceSnapshot.account_id == aid)
-            .order_by(BalanceSnapshot.created_at.desc())
-            .first()
-        )
 
         snapshot = BalanceSnapshot(
             id=_u.uuid4(),
@@ -493,31 +506,165 @@ class FinanceService:
             created_by_user_id=uid,
         )
         self.db.add(snapshot)
-
-        delta_tx = None
-        if prev is not None:
-            delta = new_balance - Decimal(str(prev.actual_balance))
-            if delta != 0 and acc is not None:
-                direction = TransactionDirection.INCOME if delta > 0 else TransactionDirection.EXPENSE
-                delta_tx = Transaction(
-                    id=_u.uuid4(),
-                    household_id=hid,
-                    user_id=uid,
-                    account_id=aid,
-                    direction=direction,
-                    amount=abs(delta),
-                    currency=acc.currency,
-                    occurred_at=datetime.now(timezone.utc),
-                    merchant_raw=f"Корректировка: {acc.name}",
-                    source="telegram",
-                    parse_status="ok",
-                    primary_tag="корректировка",
-                    extra_tags=[],
-                )
-                self.db.add(delta_tx)
-
         self.db.commit()
-        return snapshot, delta_tx
+        return snapshot, None
+
+    # ─── Web transaction create / edit ───────────────────────────────────────
+
+    @staticmethod
+    def _clean_tag(tag: str | None) -> str | None:
+        """Normalize a user-entered tag: strip, drop a leading '#', lowercase.
+        Empty → None. Matches how the bot stores tags (TagBudget matching)."""
+        if tag is None:
+            return None
+        t = tag.strip().lstrip("#").strip().lower()
+        return t or None
+
+    @staticmethod
+    def _web_fingerprint(household_id, amount, currency, merchant, tx_date, direction) -> str:
+        import hashlib
+        payload = (
+            f"{household_id}|{tx_date}|{amount}|{currency}|"
+            f"{(merchant or '').strip().lower()}|{direction}|web"
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _as_datetime(value) -> datetime:
+        """Coerce a date/datetime/ISO string to a tz-aware UTC datetime."""
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, date):
+            return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    def create_transaction(
+        self,
+        *,
+        household_id: str,
+        amount: Decimal,
+        currency,
+        direction,
+        occurred_at,
+        primary_tag: str | None = None,
+        account_id: str | None = None,
+        merchant: str | None = None,
+        user_id: str | None = None,
+        is_planned: bool = False,
+    ) -> Transaction:
+        """Create a transaction from the web UI (source='web'). Computes a
+        dedup_fingerprint with the 'web' source suffix."""
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        cur = Currency(currency) if not isinstance(currency, Currency) else currency
+        dir_ = (
+            TransactionDirection(direction)
+            if not isinstance(direction, TransactionDirection)
+            else direction
+        )
+        occ = self._as_datetime(occurred_at)
+        tag = self._clean_tag(primary_tag)
+        fp = self._web_fingerprint(hid, amount, cur.value, merchant, occ.date().isoformat(), dir_.value)
+
+        tx = Transaction(
+            id=_uuid.uuid4(),
+            household_id=hid,
+            user_id=_uuid.UUID(user_id) if isinstance(user_id, str) else user_id,
+            account_id=_uuid.UUID(account_id) if isinstance(account_id, str) else account_id,
+            direction=dir_,
+            amount=amount,
+            currency=cur,
+            occurred_at=occ,
+            merchant_raw=merchant,
+            source="web",
+            parse_status="ok",
+            primary_tag=tag,
+            extra_tags=[],
+            is_planned=is_planned,
+            is_internal_transfer=False,
+            is_skipped=False,
+            dedup_fingerprint=fp,
+        )
+        self.db.add(tx)
+        self.db.commit()
+        return tx
+
+    def update_transaction(self, tx_id: str, **fields) -> Transaction | None:
+        """Update editable fields of a transaction. Recognized keys: amount,
+        currency, direction, occurred_at, primary_tag, account_id, merchant.
+        Returns the row, or None if not found. Unknown keys are ignored;
+        omitted keys are left unchanged."""
+        try:
+            tid = _uuid.UUID(tx_id) if isinstance(tx_id, str) else tx_id
+        except ValueError:
+            return None
+        tx = self.db.get(Transaction, tid)
+        if tx is None:
+            return None
+        if "amount" in fields and fields["amount"] is not None:
+            tx.amount = fields["amount"]
+        if "currency" in fields and fields["currency"] is not None:
+            tx.currency = Currency(fields["currency"]) if not isinstance(fields["currency"], Currency) else fields["currency"]
+        if "direction" in fields and fields["direction"] is not None:
+            tx.direction = (
+                TransactionDirection(fields["direction"])
+                if not isinstance(fields["direction"], TransactionDirection)
+                else fields["direction"]
+            )
+        if "occurred_at" in fields and fields["occurred_at"] is not None:
+            tx.occurred_at = self._as_datetime(fields["occurred_at"])
+        if "primary_tag" in fields:
+            tx.primary_tag = self._clean_tag(fields["primary_tag"])
+        if "account_id" in fields and fields["account_id"] is not None:
+            aid = fields["account_id"]
+            tx.account_id = _uuid.UUID(aid) if isinstance(aid, str) else aid
+        if "merchant" in fields and fields["merchant"] is not None:
+            tx.merchant_raw = fields["merchant"]
+        self.db.commit()
+        return tx
+
+    def upsert_tag_budget(
+        self,
+        household_id: str,
+        month_key: str,
+        tag: str,
+        limit_amount: Decimal,
+        currency: str = "RUB",
+        rollover_enabled: bool | None = None,
+    ) -> "TagBudget":
+        """Create or update a per-tag monthly budget limit (web budget UI).
+        Unique on (household_id, month_key, tag)."""
+        from app.infrastructure.db.models import TagBudget
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        norm_tag = self._clean_tag(tag) or ""
+        row = (
+            self.db.query(TagBudget)
+            .filter(
+                TagBudget.household_id == hid,
+                TagBudget.month_key == month_key,
+                TagBudget.tag == norm_tag,
+            )
+            .first()
+        )
+        if row is None:
+            row = TagBudget(
+                id=_uuid.uuid4(),
+                household_id=hid,
+                month_key=month_key,
+                tag=norm_tag,
+                limit_amount=limit_amount,
+                currency=currency,
+                rollover_enabled=bool(rollover_enabled),
+            )
+            self.db.add(row)
+        else:
+            row.limit_amount = limit_amount
+            row.currency = currency
+            if rollover_enabled is not None:
+                row.rollover_enabled = rollover_enabled
+        self.db.commit()
+        return row
 
     # ─── Account transaction history (running balance) ───────────────────────
 
@@ -676,6 +823,55 @@ class FinanceService:
             })
 
         return {"accounts": result, "total_by_currency": total_by_currency}
+
+    def net_worth_rub(self, household_id: str, for_date: date | None = None) -> dict[str, Any]:
+        """Total net worth in RUB, valuing each account's latest snapshot at the
+        *real* applied exchange rate (valuation_rate_to_rub), CBR as fallback.
+
+        Returns ``{"total_rub", "any_unavailable", "accounts": [...]}``. Accounts
+        without a snapshot are skipped; a currency with no rate at all sets
+        ``any_unavailable`` and is omitted from the total.
+        """
+        from app.application.services.fx_service import valuation_rate_to_rub
+
+        today = for_date or datetime.now(timezone.utc).date()
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+        accounts = (
+            self.db.query(Account)
+            .filter(Account.household_id == hid, Account.is_active.is_(True))
+            .order_by(Account.created_at.asc())
+            .all()
+        )
+
+        total = Decimal("0")
+        any_unavailable = False
+        cards: list[dict[str, Any]] = []
+        for acc in accounts:
+            latest = (
+                self.db.query(BalanceSnapshot)
+                .filter(BalanceSnapshot.account_id == acc.id)
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            if latest is None:
+                continue
+            native = Decimal(str(latest.actual_balance))
+            rate, source = valuation_rate_to_rub(hid, acc.currency.value, today, self.db)
+            rub = (native * rate).quantize(Decimal("0.01")) if rate is not None else None
+            if rub is None:
+                any_unavailable = True
+            else:
+                total += rub
+            cards.append({
+                "name": acc.name,
+                "currency": acc.currency.value,
+                "native_balance": native,
+                "rub": rub,
+                "rate_source": source,
+            })
+
+        return {"total_rub": total, "any_unavailable": any_unavailable, "accounts": cards}
 
     # ─── Cashflow projection ──────────────────────────────────────────────────
 
@@ -1687,6 +1883,59 @@ class FinanceService:
         """Alias → upcoming_planned() for backward compatibility with API routes."""
         return self.upcoming_planned(household_id, days=days, until_date=until_date)
 
+    # ─── Reconciliation drift ──────────────────────────────────────────────
+
+    def _account_drift(self, account_id, latest_snap) -> tuple[float | None, float | None]:
+        """Derived reconciliation drift for one account.
+
+        ``computed`` = the snapshot *before* ``latest_snap`` plus the signed sum
+        of real transactions attributed to the account in the window between the
+        two snapshots (by ``occurred_at``). ``drift`` = reported − computed.
+
+        Returns ``(None, None)`` when there is no prior snapshot (nothing to
+        reconcile). Because attribution is by ``occurred_at``, a past-dated
+        expense added later lands in the window and shrinks the drift — the
+        on-the-fly behavior that replaces the old fixed «корректировка» tx.
+        """
+        if latest_snap is None:
+            return None, None
+        prev = (
+            self.db.query(BalanceSnapshot)
+            .filter(
+                BalanceSnapshot.account_id == account_id,
+                BalanceSnapshot.created_at < latest_snap.created_at,
+            )
+            .order_by(BalanceSnapshot.created_at.desc())
+            .first()
+        )
+        if prev is None:
+            return None, None
+        txs = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.account_id == account_id,
+                Transaction.occurred_at > prev.created_at,
+                Transaction.occurred_at <= latest_snap.created_at,
+                Transaction.is_planned == False,  # noqa: E712 — ЗАКОН
+                Transaction.is_internal_transfer == False,  # noqa: E712 — ЗАКОН
+                Transaction.is_skipped == False,  # noqa: E712
+                Transaction.direction.in_(
+                    [TransactionDirection.INCOME, TransactionDirection.EXPENSE]
+                ),
+            )
+            .all()
+        )
+        delta = Decimal("0")
+        for tx in txs:
+            amt = Decimal(str(tx.amount))
+            if tx.direction == TransactionDirection.INCOME:
+                delta += amt
+            else:
+                delta -= amt
+        computed = Decimal(str(prev.actual_balance)) + delta
+        drift = Decimal(str(latest_snap.actual_balance)) - computed
+        return float(computed), float(drift)
+
     # ─── Data-health home page ─────────────────────────────────────────────
 
     def data_health(self, household_id: str, current_user_id: str | None = None) -> dict[str, Any]:
@@ -1774,6 +2023,8 @@ class FinanceService:
             )
             age = _age_days(latest.created_at) if latest else None
             status = _status_from_age(age, BAL_WARN_D, BAL_ERR_D)
+            computed, drift = self._account_drift(acct.id, latest)
+            drift_status = _drift_status(drift)
             bal_accounts.append({
                 "account_id": str(acct.id),
                 "name": acct.name,
@@ -1782,6 +2033,9 @@ class FinanceService:
                 "last_verified_at": latest.created_at.isoformat() if latest else None,
                 "age_days": age,
                 "status": status,
+                "computed_balance": computed,
+                "drift": drift,
+                "drift_status": drift_status,
                 "user_id": str(acct.owner_user_id) if acct.owner_user_id else None,
                 "user_name": user_names.get(acct.owner_user_id),
             })
@@ -1791,7 +2045,13 @@ class FinanceService:
                     "label": f"Сверить баланс: {acct.name}",
                     "ref": str(acct.id),
                 })
-        bal_status = _worst([a["status"] for a in bal_accounts])
+            if drift_status != "green":
+                _route(acct.owner_user_id, {
+                    "kind": "drift",
+                    "label": f"Разобрать расхождение: {acct.name}",
+                    "ref": str(acct.id),
+                })
+        bal_status = _worst([a["status"] for a in bal_accounts] + [a["drift_status"] for a in bal_accounts])
 
         # ── Import freshness (latest imported_at per source_name)
         raw_rows = (
@@ -1825,6 +2085,7 @@ class FinanceService:
         attention_count = (
             uncat_count
             + sum(1 for a in bal_accounts if a["status"] in ("amber", "red"))
+            + sum(1 for a in bal_accounts if a["drift_status"] != "green")
             + sum(1 for s in sources if s["status"] in ("amber", "red"))
         )
 
@@ -1897,6 +2158,15 @@ class FinanceService:
                     "account_id": f"in.({','.join(account_ids)})",
                     "order": "account_id.asc,created_at.desc",
                 })
+            # Real, account-attributed txns for drift derivation (ЗАКОН filters).
+            attributed_rows = sb.get("transactions", {
+                "select": "account_id,occurred_at,amount,direction,is_planned,is_internal_transfer,is_skipped",
+                "household_id": f"eq.{household_id}",
+                "is_planned": "eq.false",
+                "is_internal_transfer": "eq.false",
+                "is_skipped": "eq.false",
+                "direction": "in.(income,expense)",
+            })
             raw_rows = sb.get("raw_import_transactions", {
                 "select": "source_name,imported_at",
                 "household_id": f"eq.{household_id}",
@@ -1927,14 +2197,48 @@ class FinanceService:
         oldest_days = _age_from_iso(uncat[0]["occurred_at"]) if uncat else None
         uncat_status = _signal_uncat_status(uncat_count, oldest_days)
 
-        latest_snap: dict[str, dict] = {}
+        # All snapshots per account, latest-first (snap_rows already created_at desc).
+        snaps_by_acct: dict[str, list[dict]] = {}
         for r in snap_rows:
-            if r["account_id"] not in latest_snap:
-                latest_snap[r["account_id"]] = r
+            snaps_by_acct.setdefault(r["account_id"], []).append(r)
+
+        def _parse_iso(iso: str | None):
+            if not iso:
+                return None
+            try:
+                dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+        def _drift_rest(account_id: str) -> tuple[float | None, float | None]:
+            snaps = snaps_by_acct.get(account_id, [])
+            if len(snaps) < 2:
+                return None, None
+            latest_s, prev_s = snaps[0], snaps[1]
+            lo, hi = _parse_iso(prev_s["created_at"]), _parse_iso(latest_s["created_at"])
+            delta = Decimal("0")
+            for t in attributed_rows:
+                if t.get("account_id") != account_id:
+                    continue
+                occ = _parse_iso(t.get("occurred_at"))
+                if occ is None or lo is None or hi is None or not (lo < occ <= hi):
+                    continue
+                amt = Decimal(str(t.get("amount") or 0))
+                if (t.get("direction") or "").lower() == "income":
+                    delta += amt
+                else:
+                    delta -= amt
+            computed = Decimal(str(prev_s["actual_balance"])) + delta
+            drift = Decimal(str(latest_s["actual_balance"])) - computed
+            return float(computed), float(drift)
+
+        latest_snap: dict[str, dict] = {k: v[0] for k, v in snaps_by_acct.items()}
         bal_accounts = []
         for a in accounts:
             snap = latest_snap.get(a["id"])
             age = _age_from_iso(snap["created_at"]) if snap else None
+            computed, drift = _drift_rest(a["id"])
             bal_accounts.append({
                 "account_id": a["id"],
                 "name": a["name"],
@@ -1943,10 +2247,13 @@ class FinanceService:
                 "last_verified_at": snap["created_at"] if snap else None,
                 "age_days": age,
                 "status": _status_from_age(age, BAL_WARN_D, BAL_ERR_D),
+                "computed_balance": computed,
+                "drift": drift,
+                "drift_status": _drift_status(drift),
                 "user_id": a.get("owner_user_id"),
                 "user_name": user_names.get(a.get("owner_user_id")),
             })
-        bal_status = _worst([a["status"] for a in bal_accounts])
+        bal_status = _worst([a["status"] for a in bal_accounts] + [a["drift_status"] for a in bal_accounts])
 
         latest_by_source: dict[str, str] = {}
         for r in raw_rows:
@@ -1988,10 +2295,17 @@ class FinanceService:
                     "label": f"Сверить баланс: {acct['name']}",
                     "ref": acct["account_id"],
                 })
+            if acct["drift_status"] != "green":
+                _route(acct["user_id"], {
+                    "kind": "drift",
+                    "label": f"Разобрать расхождение: {acct['name']}",
+                    "ref": acct["account_id"],
+                })
 
         attention_count = (
             uncat_count
             + sum(1 for a in bal_accounts if a["status"] in ("amber", "red"))
+            + sum(1 for a in bal_accounts if a["drift_status"] != "green")
             + sum(1 for s in sources if s["status"] in ("amber", "red"))
         )
 

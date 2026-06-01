@@ -21,9 +21,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.services.finance_service import FinanceService
-from app.application.services.fx_service import convert_to_rub
-from app.domain.enums import TransactionDirection
-from app.infrastructure.db.models import Account, BalanceSnapshot, Transaction, User
+from app.infrastructure.db.models import Account, BalanceSnapshot, User
 from app.infrastructure.db.session import SessionLocal
 
 router = Router()
@@ -132,25 +130,13 @@ async def send_balances(message: Message, telegram_id: str) -> None:
         snapshots = {acc.id: _latest_snapshot(db, acc.id) for acc in accounts}
         text = "💼 Счета\n\n" + _format_accounts(accounts, snapshots)
 
-        # Net Worth line: sum all account balances converted to RUB
-        from datetime import date as _date
-        today = _date.today()
-        total_rub = Decimal("0")
-        unavailable = False
-        for acc in accounts:
-            snap = snapshots.get(acc.id)
-            if snap is None:
-                continue
-            bal = Decimal(str(snap.actual_balance))
-            rub = convert_to_rub(bal, acc.currency.value, today, db)
-            if rub is None:
-                unavailable = True
-            else:
-                total_rub += rub
-        if unavailable:
+        # Net Worth line: sum all account balances converted to RUB at the real
+        # applied exchange rate (valuation_rate_to_rub), CBR as fallback.
+        nw = FinanceService(db).net_worth_rub(str(user.household_id))
+        if nw["any_unavailable"]:
             text += "\n\n≈ Net Worth: ~ RUB (курс недоступен)"
         else:
-            formatted = f"{total_rub:,.0f}".replace(",", " ")
+            formatted = f"{nw['total_rub']:,.0f}".replace(",", " ")
             text += f"\n\n≈ Net Worth: {formatted} RUB"
 
         keyboard = _build_accounts_keyboard(accounts)
@@ -224,13 +210,13 @@ async def on_balance_amount_input(message: Message, state: FSMContext) -> None:
         delta = amount - prev_amount
         sign = "+" if delta >= 0 else "−"
         abs_delta = abs(delta)
-        direction_label = "доход" if delta >= 0 else "расход"
         confirm_text = (
             f"💼 {acc_name} · {acc_currency}\n\n"
             f"Текущий баланс по системе: {prev_amount} {acc_currency}\n"
             f"Ты вводишь: {amount} {acc_currency}\n"
             f"Расхождение: {sign}{abs_delta} {acc_currency}\n\n"
-            f"Записать как {direction_label} без категории?"
+            f"Сохранить новый баланс? Расхождение появится в «Состоянии данных», "
+            f"если его не объясняют операции."
         )
     else:
         confirm_text = (
@@ -276,6 +262,11 @@ async def on_reconcile_confirm(callback: CallbackQuery, state: FSMContext) -> No
         prev = _latest_snapshot(db, acc.id)
         prev_amount = Decimal(str(prev.actual_balance)) if prev else None
 
+        # Record only the snapshot. Any discrepancy between this balance and the
+        # one implied by transactions is derived on the fly as reconciliation
+        # «drift» in the data-health view — we no longer mint a fixed
+        # «корректировка» transaction (which never updated when a past-dated
+        # expense was added later).
         snapshot = BalanceSnapshot(
             id=uuid.uuid4(),
             account_id=acc.id,
@@ -284,31 +275,6 @@ async def on_reconcile_confirm(callback: CallbackQuery, state: FSMContext) -> No
             created_by_user_id=user_id,
         )
         db.add(snapshot)
-
-        delta_tx = None
-        if prev_amount is not None:
-            delta = amount - prev_amount
-            if delta != 0:
-                from datetime import datetime, timezone as tz
-                direction = TransactionDirection.INCOME if delta > 0 else TransactionDirection.EXPENSE
-                delta_tx = Transaction(
-                    id=uuid.uuid4(),
-                    household_id=acc.household_id,
-                    user_id=user_id,
-                    account_id=acc.id,
-                    direction=direction,
-                    amount=abs(delta),
-                    currency=acc.currency,
-                    occurred_at=datetime.now(tz.utc),
-                    merchant_raw=f"Корректировка: {acc.name}",
-                    source="telegram",
-                    parse_status="needs_correction",
-                    primary_tag="корректировка",
-                    extra_tags=[],
-                    is_planned=False,
-                    is_skipped=False,
-                )
-                db.add(delta_tx)
 
         db.commit()
         acc_currency = acc.currency.value

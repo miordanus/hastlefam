@@ -118,6 +118,71 @@ def _upsert_rate(db, for_date: date, from_currency: str, rate: Decimal) -> None:
     )
 
 
+def last_applied_rate_to_rub(
+    household_id,
+    currency: str,
+    db: Session,
+) -> Decimal | None:
+    """The most recent *actual* RUB-per-unit rate the household applied for
+    `currency`, derived from a RUB-paired EXCHANGE transaction.
+
+    Returns None when no exchange has paired `currency` with RUB (so the caller
+    can fall back to the CBR rate). RUB itself is always 1.
+    """
+    import uuid as _uuid
+
+    from app.domain.enums import TransactionDirection
+    from app.infrastructure.db.models import Transaction
+
+    cur = (currency or "").upper()
+    if cur == "RUB":
+        return Decimal("1")
+
+    hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+    rows = (
+        db.query(Transaction)
+        .filter(
+            Transaction.household_id == hid,
+            Transaction.direction == TransactionDirection.EXCHANGE,
+        )
+        .order_by(Transaction.occurred_at.desc())
+        .all()
+    )
+    for tx in rows:
+        fc = (tx.from_currency or "").upper()
+        tc = (tx.to_currency or "").upper()
+        if fc == "RUB" and tc == cur and tx.to_amount:
+            return Decimal(str(tx.from_amount)) / Decimal(str(tx.to_amount))
+        if tc == "RUB" and fc == cur and tx.from_amount:
+            return Decimal(str(tx.to_amount)) / Decimal(str(tx.from_amount))
+    return None
+
+
+def valuation_rate_to_rub(
+    household_id,
+    currency: str,
+    for_date: date,
+    db: Session,
+) -> tuple[Decimal | None, str]:
+    """RUB-per-unit rate used to *value a holding* in `currency`, preferring the
+    real applied exchange rate over the CBR rate.
+
+    Returns (rate, source) where source ∈ {"actual", "cbr", "rub", "none"}.
+    Scope is holdings/balance valuation — per-expense conversion keeps using the
+    date-based CBR path (`convert_to_rub` / `_rub_on_date`).
+    """
+    cur = (currency or "").upper()
+    if cur == "RUB":
+        return Decimal("1"), "rub"
+    actual = last_applied_rate_to_rub(household_id, currency, db)
+    if actual is not None:
+        return actual, "actual"
+    cbr = convert_to_rub(Decimal("1"), currency, for_date, db)
+    if cbr is not None:
+        return cbr, "cbr"
+    return None, "none"
+
+
 def convert_to_rub(
     amount: Decimal,
     currency: str,

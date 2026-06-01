@@ -35,3 +35,35 @@ class TransactionCorrectionUpdate(BaseModel):
 class MonthQuery(BaseModel):
     household_id: str
     as_of: date | None = None
+
+
+class TransactionCreate(BaseModel):
+    household_id: str
+    amount: Decimal
+    currency: str = "RUB"
+    direction: str = "expense"          # income | expense | exchange | transfer
+    occurred_at: date
+    primary_tag: str | None = None
+    account_id: str | None = None
+    merchant: str | None = None
+    user_id: str | None = None
+    is_planned: bool = False
+
+
+class TransactionUpdate(BaseModel):
+    amount: Decimal | None = None
+    currency: str | None = None
+    direction: str | None = None
+    occurred_at: date | None = None
+    primary_tag: str | None = None
+    account_id: str | None = None
+    merchant: str | None = None
+
+
+class BudgetUpsert(BaseModel):
+    household_id: str
+    month_key: str                      # 'YYYY-MM'
+    tag: str
+    limit_amount: Decimal
+    currency: str = "RUB"
+    rollover_enabled: bool | None = None
