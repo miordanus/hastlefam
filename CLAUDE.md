@@ -46,10 +46,11 @@ app/
     error_handler.py            # FastAPI 500 handler
     event_logger.py             # writes to event_log table
     prompt_logger.py            # LLM prompt/response logging
-  dashboard/templates/          # Jinja2: index.html, login.html, finance_corrections.html, monthly_report.html, data_health.html
+  dashboard/templates/          # Jinja2: index.html, login.html, finance_corrections.html (legacy),
+                                # monthly_report.html, data_health.html, planned.html, quality.html, accounts.html
   seeds/                        # run_all + seed_{areas,categories,owners,users}
 api/index.py                    # Vercel adapter (re-exports FastAPI app)
-migrations/                     # alembic env + 0001..0020 versions + manual_apply.sql
+migrations/                     # alembic env + 0001..0021 versions + manual_apply.sql
 tests/                          # pytest, SQLite in-memory via conftest.py
 Procfile                        # web: uvicorn ; worker: python -m app.bot.main
 ```
@@ -104,7 +105,22 @@ Railway `Procfile` maps `web:` → uvicorn, `worker:` → bot. `railway.json` ha
 
 Direct SQLAlchemy → Supabase Postgres is unreliable on Vercel (IPv6 / pooler quirks). When `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are set, the finance read endpoints transparently switch to PostgREST via `SupabaseClient` (`app/infrastructure/supabase/rest_client.py`) instead of opening a Postgres socket.
 
-The switch is centralised in `app/api/routers/finance.py` via `_use_rest()` plus per-endpoint dispatchers (`_run_monthly_report`, `_run_cashflow`). The corresponding service methods are named `<name>_via_rest` on `FinanceService` (currently `monthly_report_via_rest`, `cashflow_monthly_via_rest`). **When adding a new finance read endpoint that needs to work on Vercel, write a `*_via_rest` sibling and a `_run_*` dispatcher — do not call `FinanceService(db).<method>` directly from the route.** REST writes go through `sb.patch(...)` / `sb.post(...)` (see `/finance/transactions/{id}/action`). The Telegram-callback user lookup in `auth.py` follows the same pattern (REST when configured, SQLAlchemy otherwise).
+The switch is centralised in `app/api/routers/finance.py` via `_use_rest()` plus per-endpoint dispatchers (`_run_monthly_report`, `_run_cashflow`, `_run_data_health`, `_run_planned`, `_run_quality`, `_run_accounts`). The corresponding service methods are named `<name>_via_rest` on `FinanceService`: `monthly_report_via_rest`, `cashflow_monthly_via_rest`, `data_health_via_rest`, `overdue_planned_items_via_rest`, `planned_workbench_via_rest`, `untagged_transactions_via_rest`, `bulk_tag_via_rest`, `list_accounts_with_balances_via_rest`, `create_account_via_rest`, and the month-lock set (`month_lock_status_via_rest`, `is_month_locked_via_rest`, `lock_month_via_rest`, `unlock_month_via_rest`). **When adding a new finance read endpoint that needs to work on Vercel, write a `*_via_rest` sibling and a `_run_*` dispatcher — do not call `FinanceService(db).<method>` directly from the route.** REST writes go through `sb.patch(...)` / `sb.post(...)`. Dual-path write routes (`/transactions` create, `/transactions/{id}/edit`, `/transactions/{id}/action`, `/transactions/bulk_tag`, `/accounts`, `/months/lock|unlock`) branch on `_use_rest()` — REST via `SupabaseClient`, else a SQLAlchemy service method. The Telegram-callback user lookup in `auth.py` follows the same pattern.
+
+### Web finance surfaces (dashboard)
+
+Beyond the monthly report + data-health home, the dashboard has four worked-through surfaces, all linked from the nav on every page:
+
+- **`/finance/planned`** (`planned.html`, `planned_workbench`) — every planned item (`is_planned=True, is_skipped=False`) grouped into **overdue** vs **upcoming**, each actionable: ✓ paid (`/action paid`), 🗓 reschedule (rides `/edit` with a new `occurred_at`), ✕ skip (`/action skip`).
+- **`/finance/quality`** (`quality.html`, `untagged_transactions` + `bulk_tag`) — fast bulk-tagging of untagged real transactions (**untagged = `primary_tag IS NULL`** honouring ЗАКОН — NOT the legacy `category_id` filter on `/finance/corrections`). Each row gets a suggested tag from `merchant_tag_rules`; "Применить всё" posts to `/transactions/bulk_tag`.
+- **`/finance/accounts`** (`accounts.html`, `list_accounts_with_balances`) — add accounts (dual-path `POST /accounts`) and see all balances consolidated to **RUB** via the FX engine; `fx_complete=false` surfaces a missing rate instead of a silent 1:1.
+- **Overdue carry-in (#1):** `monthly_report{,_via_rest}` embed `overdue_planned` (planned items whose date passed, from *earlier* months) so they can't fall off the current calendar-month tab; rendered as a pinned banner above the ledger. `data_health` carries a `today` block (consolidated RUB, overdue/upcoming planned counts, untagged count, month-lock state) powering the "Сегодня" hero.
+
+`_status_for(is_planned, occurred, merchant, today)` is the single source of truth for UI status (`actual/planned/overdue/unplanned`), used by both `_derive_status` (ORM) and `monthly_report_via_rest`.
+
+### Approve & lock month (#6)
+
+`MonthLock` (`month_lock` table, migration 0021, unique on `household_id, month_key`) snapshots a month's approved actual income/expense (RUB) and freezes it. `lock_month`/`unlock_month`/`month_lock_status` (+ `_via_rest`) live on `FinanceService`; routes are `/finance/months/lock|unlock` and `/finance/months/lock/status`. **Enforcement:** `_assert_unlocked()` guards the three write routes (`/transactions` create, `/transactions/{id}/edit`, `/transactions/{id}/action`), returning **423** for any write touching a locked month — including rescheduling a transaction *into* a locked month. The guard is **fail-open** (`_is_locked`/`_tx_meta` swallow errors → treat as open) so a pre-migration `month_lock` absence never 500s writes.
 
 ### Data-health home page (`/finance/health`)
 
@@ -128,7 +144,7 @@ User-facing commands implemented across these handlers include `/start`, `/help`
 
 ### Database layer
 
-All 26 ORM models live in `app/infrastructure/db/models/all_models.py` (single file): `Household, User, Owner, Area, Sprint, Task, Decision, Note, Meeting, FinanceCategory, Account, RawImportTransaction, Transaction, RecurringPayment, SavingsGoal, Reminder, Digest, LLMDraft, PlannedPayment, BalanceSnapshot, EventLog, MerchantTagRule, Debt, CategoryBudget, TagBudget, FxRate`.
+All 27 ORM models live in `app/infrastructure/db/models/all_models.py` (single file): `Household, User, Owner, Area, Sprint, Task, Decision, Note, Meeting, FinanceCategory, Account, RawImportTransaction, Transaction, RecurringPayment, SavingsGoal, Reminder, Digest, LLMDraft, PlannedPayment, BalanceSnapshot, EventLog, MerchantTagRule, Debt, CategoryBudget, TagBudget, FxRate, MonthLock`.
 
 All tables live in the `hastlefam` Postgres schema (set via `connect_args={'options': '-csearch_path=hastlefam'}` in `session.py`; constant `DB_SCHEMA = 'hastlefam'` in `db/base.py`).
 

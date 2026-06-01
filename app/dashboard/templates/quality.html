@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HastleFam — Качество данных</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+:root {
+  --bg:#09090b; --surface:#141417; --surface2:#1a1a1f; --border:#27272a; --border2:#3f3f46;
+  --text:#e4e4e7; --muted:#71717a; --subtle:#52525b; --accent:#6366f1;
+  --green:#22c55e; --red:#ef4444; --yellow:#f59e0b; --radius:10px;
+}
+body { background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif; font-size:14px; line-height:1.5; min-height:100dvh; -webkit-font-smoothing:antialiased; }
+.mono { font-family:'JetBrains Mono','Fira Code',monospace; font-variant-numeric:tabular-nums; }
+a { color:inherit; text-decoration:none; }
+.h-root { position:sticky; top:0; z-index:50; background:rgba(9,9,11,0.92); backdrop-filter:blur(12px); border-bottom:1px solid #1f1f23; }
+.h-inner { max-width:1120px; margin:0 auto; padding:0 20px; height:52px; display:flex; align-items:center; gap:12px; }
+.h-brand { display:flex; align-items:center; gap:8px; }
+.h-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); }
+.h-name { font-size:14px; font-weight:600; letter-spacing:0.03em; color:#fff; }
+.h-right { margin-left:auto; display:flex; align-items:center; gap:14px; }
+.h-link { font-size:12px; color:var(--muted); }
+.h-link:hover { color:var(--text); }
+.container { max-width:1120px; margin:0 auto; padding:24px 20px 64px; display:flex; flex-direction:column; gap:18px; }
+.hero { background:linear-gradient(135deg,#141417 0%,#18181e 100%); border:1px solid var(--border); border-radius:14px; padding:22px 26px; display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+.hero-label { font-size:12px; font-weight:500; color:var(--muted); letter-spacing:0.08em; text-transform:uppercase; }
+.hero-num { font-size:40px; font-weight:600; letter-spacing:-0.02em; line-height:1; }
+.bar { margin-left:auto; display:flex; gap:10px; align-items:center; }
+.btn { border:none; font-size:13px; padding:8px 16px; border-radius:7px; cursor:pointer; font-family:inherit; font-weight:600; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-primary:disabled { opacity:.45; cursor:default; }
+.btn-ghost { background:rgba(99,102,241,0.12); color:var(--accent); }
+.panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+.panel-empty { padding:30px 18px; font-size:14px; color:var(--green); text-align:center; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-size:11px; color:var(--subtle); font-weight:500; text-transform:uppercase; letter-spacing:0.05em; padding:9px 18px; border-bottom:1px solid #1f1f23; }
+td { padding:9px 18px; font-size:13px; border-bottom:1px solid var(--surface2); }
+tr:last-child td { border-bottom:none; }
+.t-num { color:#a1a1aa; }
+.tag-input { width:160px; background:var(--surface2); border:1px solid var(--border2); color:var(--text); border-radius:6px; padding:5px 9px; font-size:13px; font-family:inherit; }
+.tag-input:focus { outline:none; border-color:var(--accent); }
+.tag-input.filled { border-color:var(--green); }
+.chip { font-size:11px; color:var(--accent); border:1px solid var(--border2); border-radius:5px; padding:2px 8px; cursor:pointer; background:none; font-family:inherit; }
+.chip:hover { border-color:var(--accent); }
+.sug { font-size:11px; color:var(--subtle); }
+@media (max-width:760px){ .tag-input { width:120px; } }
+</style>
+</head>
+<body>
+<div class="h-root"><div class="h-inner">
+  <div class="h-brand"><span class="h-dot"></span><span class="h-name">HastleFam</span></div>
+  <div class="h-right">
+    <a class="h-link" href="/finance/report?household_id={{ household_id or '' }}">Отчёт</a>
+    <a class="h-link" href="/finance/health?household_id={{ household_id or '' }}">Здоровье</a>
+    <a class="h-link" href="/finance/planned?household_id={{ household_id or '' }}">Планы</a>
+    <a class="h-link" href="/finance/accounts?household_id={{ household_id or '' }}">Счета</a>
+    <a class="h-link" href="/auth/logout">Выйти</a>
+  </div>
+</div></div>
+
+<script type="application/json" id="quality-data">{{ quality_data | tojson }}</script>
+<script type="application/json" id="hid-data">{{ (household_id or '') | tojson }}</script>
+
+<div class="container" id="root"><div class="panel-empty">Загрузка…</div></div>
+
+<datalist id="tag-list"></datalist>
+
+<script>
+const D = (() => { try { return JSON.parse(document.getElementById('quality-data').textContent || 'null'); } catch(e){ return null; } })();
+const HID = (() => { try { return JSON.parse(document.getElementById('hid-data').textContent || '""'); } catch(e){ return ''; } })();
+
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtAmt = (a,c) => `${Number(a).toLocaleString('ru-RU')} ${String(c||'').toUpperCase()}`;
+function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?esc(iso):d.toLocaleDateString('ru-RU',{day:'2-digit',month:'short'}); }
+function plural(n,one,few,many){ const a=n%10,b=n%100; if(a===1&&b!==11)return one; if(a>=2&&a<=4&&(b<12||b>14))return few; return many; }
+
+function setTag(id, val){
+  const el = document.getElementById('tag-'+id);
+  if(el){ el.value = val; el.classList.toggle('filled', !!val.trim()); updateApply(); }
+}
+function onInput(id){
+  const el = document.getElementById('tag-'+id);
+  if(el) el.classList.toggle('filled', !!el.value.trim());
+  updateApply();
+}
+function collect(){
+  return (D.items||[]).map(it => {
+    const el = document.getElementById('tag-'+it.id);
+    const tag = el ? el.value.trim() : '';
+    return tag ? {tx_id: it.id, tag} : null;
+  }).filter(Boolean);
+}
+function updateApply(){
+  const n = collect().length;
+  const btn = document.getElementById('apply-btn');
+  if(btn){ btn.disabled = n===0; btn.textContent = n ? `Применить (${n})` : 'Применить'; }
+}
+function fillSuggestions(){
+  (D.items||[]).forEach(it => { if(it.suggested_tag) setTag(it.id, it.suggested_tag); });
+}
+async function apply(){
+  const assignments = collect();
+  if(!assignments.length) return;
+  const btn = document.getElementById('apply-btn'); btn.disabled = true; btn.textContent = 'Сохраняю…';
+  try {
+    const r = await fetch('/finance/transactions/bulk_tag', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({household_id: HID, assignments}),
+    });
+    if(!r.ok){ alert('Не удалось — '+r.status); btn.disabled=false; return; }
+    setTimeout(()=>location.reload(), 150);
+  } catch(e){ alert('Ошибка: '+e.message); btn.disabled=false; }
+}
+
+function render(){
+  const root = document.getElementById('root');
+  if(!D){ root.innerHTML = '<div class="panel-empty" style="color:var(--subtle)">Нет household_id — данные не загружены.</div>'; return; }
+  document.getElementById('tag-list').innerHTML = (D.known_tags||[]).map(t=>`<option value="${esc(t)}">`).join('');
+  const n = D.count || 0;
+  const hero = `<div class="hero">
+    <div><div class="hero-label">Без тега</div><div class="hero-num" style="color:${n?'var(--yellow)':'var(--green)'}">${n}</div></div>
+    <div class="bar">
+      ${n?`<button class="btn btn-ghost" onclick="fillSuggestions()">Подставить подсказки</button>`:''}
+      <button class="btn btn-primary" id="apply-btn" onclick="apply()" disabled>Применить</button>
+    </div></div>`;
+  if(!n){ root.innerHTML = hero + '<div class="panel"><div class="panel-empty">Всё размечено по тегам 🎉</div></div>'; return; }
+  const rows = (D.items||[]).map(it => `<tr>
+    <td class="t-num">${fmtDate(it.occurred_at)}</td>
+    <td>${esc(it.merchant_raw)||'—'}</td>
+    <td class="mono t-num">${it.direction==='income'?'+':'−'}${fmtAmt(it.amount,it.currency)}</td>
+    <td>
+      <input class="tag-input ${it.suggested_tag?'':''}" id="tag-${it.id}" list="tag-list" placeholder="#тег" oninput="onInput('${it.id}')">
+      ${it.suggested_tag?`<button class="chip" onclick="setTag('${it.id}','${esc(it.suggested_tag)}')">→ ${esc(it.suggested_tag)}</button>`:'<span class="sug">—</span>'}
+    </td>
+  </tr>`).join('');
+  root.innerHTML = hero + `<div class="panel">
+    <table><thead><tr><th>Дата</th><th>Где</th><th>Сумма</th><th>Тег</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+  updateApply();
+}
+render();
+</script>
+</body>
+</html>

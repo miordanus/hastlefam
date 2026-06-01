@@ -53,6 +53,17 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
 .h-tab { background:none; border:none; color:var(--muted); font-size:13px; padding:6px 12px; border-radius:6px; cursor:pointer; white-space:nowrap; transition:color .15s,background .15s; font-family:inherit; }
 .h-tab:hover { color:#a1a1aa; }
 .h-tab.active { color:var(--text); background:#1f1f23; }
+.h-tab-link { text-decoration:none; display:inline-flex; align-items:center; }
+.h-tab-link:hover { color:var(--accent); }
+.lockbar { display:flex; align-items:center; gap:12px; padding:11px 16px; border-radius:10px; border:1px solid var(--border); background:var(--surface); }
+.lockbar.locked { border-color:#15803d; background:rgba(34,197,94,0.06); }
+.lockbar-txt { font-size:13px; color:#a1a1aa; flex:1; }
+.lockbar-txt b { color:var(--text); }
+.lockbar-btn { border:none; font-size:12px; padding:6px 14px; border-radius:6px; cursor:pointer; font-family:inherit; font-weight:600; }
+.lockbar-btn-lock { background:rgba(99,102,241,0.14); color:var(--accent); }
+.lockbar-btn-lock:hover { background:rgba(99,102,241,0.24); }
+.lockbar-btn-unlock { background:rgba(113,113,122,0.15); color:var(--muted); }
+.lockbar-btn-unlock:hover { background:rgba(113,113,122,0.25); color:var(--text); }
 .h-right { display:flex; align-items:center; gap:10px; flex-shrink:0; }
 .h-period { display:flex; align-items:center; gap:4px; }
 .h-nav-btn { background:none; border:none; color:var(--muted); font-size:18px; cursor:pointer; padding:2px 6px; line-height:1; border-radius:4px; font-family:inherit; }
@@ -356,6 +367,11 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
       <button class="h-tab"        data-tab="yearly"    onclick="switchTab('yearly')">Год</button>
       <button class="h-tab"        data-tab="annual"    onclick="switchTab('annual')">Годовой отчёт</button>
       <button class="h-tab"        data-tab="cashflow"  onclick="switchTab('cashflow')">Кэшфлоу</button>
+      <span style="flex:1"></span>
+      <a class="h-tab h-tab-link" id="nav-planned"  href="/finance/planned">Планы</a>
+      <a class="h-tab h-tab-link" id="nav-quality"  href="/finance/quality">Качество</a>
+      <a class="h-tab h-tab-link" id="nav-accounts" href="/finance/accounts">Счета</a>
+      <a class="h-tab h-tab-link" id="nav-health"   href="/finance/health">Здоровье</a>
     </nav>
     <div class="h-right">
       <div class="h-period">
@@ -412,6 +428,8 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
 
     <div class="stat-grid" id="stat-grid"></div>
 
+    <div id="lock-bar"></div>
+    <div id="overdue-carryin"></div>
     <div id="alerts-container"></div>
 
     <div class="two-col">
@@ -703,6 +721,16 @@ if (_INJECTED && _INJECTED.accounts) {
   HOUSEHOLD_ID = new URLSearchParams(location.search).get('household_id');
 }
 
+// Wire nav links (Планы / Качество / Счета / Здоровье) to carry the household id.
+(() => {
+  const hh = HOUSEHOLD_ID || new URLSearchParams(location.search).get('household_id');
+  if (!hh) return;
+  ['nav-planned','nav-quality','nav-accounts','nav-health'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.href += (el.href.includes('?') ? '&' : '?') + 'household_id=' + encodeURIComponent(hh);
+  });
+})();
+
 // Real-today anchors (independent of report period) — used for the "текущий" badge.
 const _t = new Date(TODAY);
 const _TODAY_Y = _t.getFullYear();
@@ -765,6 +793,12 @@ function fmtNative(amount, currency) {
 function fmtSigned(amount, dir, currency) {
   const s = dir === 'income' ? '+' : dir === 'expense' ? '−' : '';
   return s + fmtNative(amount, currency);
+}
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
 }
 function dateLabel(d) {
   if (!d) return '';
@@ -1070,7 +1104,53 @@ function renderAlerts() {
 }
 function toggleAlerts() { _alertsExpanded = !_alertsExpanded; renderAlerts(); }
 
+// Approve & lock the month (#6). Locking snapshots the approved totals and freezes edits.
+function _monthKey() { return `${_REPORT_YEAR}-${String(_REPORT_MONTH).padStart(2,'0')}`; }
+
+function renderLockBar() {
+  const cont = document.getElementById('lock-bar');
+  if (!cont) return;
+  const ml = (_INJECTED && _INJECTED.month_lock) || { locked:false };
+  _MONTH_LOCKED = !!ml.locked;
+  const mk = _monthKey();
+  if (ml.locked) {
+    const inc = viewCurrency === 'usd' ? fmtUsd((ml.income_rub||0)/FX_RATES.usd) : fmtRub(ml.income_rub||0);
+    const exp = viewCurrency === 'usd' ? fmtUsd((ml.expense_rub||0)/FX_RATES.usd) : fmtRub(ml.expense_rub||0);
+    cont.innerHTML = `<div class="lockbar locked">
+      <span class="alerts-icon" style="color:var(--green)">🔒</span>
+      <span class="lockbar-txt">Месяц закрыт и зафиксирован · доход <b>${inc}</b> · расход <b>${exp}</b>${ml.locked_at?` · ${dateLabel(ml.locked_at)}`:''}</span>
+      <button class="lockbar-btn lockbar-btn-unlock" onclick="unlockMonth()">Открыть</button>
+    </div>`;
+  } else {
+    cont.innerHTML = `<div class="lockbar">
+      <span class="lockbar-txt">Когда месяц разобран — зафиксируйте доходы и расходы.</span>
+      <button class="lockbar-btn lockbar-btn-lock" onclick="lockMonth()">🔒 Закрыть месяц</button>
+    </div>`;
+  }
+}
+
+async function lockMonth() {
+  if (!confirm(`Закрыть ${_monthKey()}? Транзакции этого месяца станут только для чтения.`)) return;
+  const fd = new FormData(); fd.set('household_id', HOUSEHOLD_ID); fd.set('month', _monthKey());
+  try {
+    const r = await fetch('/finance/months/lock', { method:'POST', body:fd });
+    if (!r.ok) { alert('Не удалось закрыть — ' + r.status); return; }
+    setTimeout(() => location.reload(), 150);
+  } catch (e) { alert('Ошибка: ' + e.message); }
+}
+async function unlockMonth() {
+  const fd = new FormData(); fd.set('household_id', HOUSEHOLD_ID); fd.set('month', _monthKey());
+  try {
+    const r = await fetch('/finance/months/unlock', { method:'POST', body:fd });
+    if (!r.ok) { alert('Не удалось открыть — ' + r.status); return; }
+    setTimeout(() => location.reload(), 150);
+  } catch (e) { alert('Ошибка: ' + e.message); }
+}
+
+let _MONTH_LOCKED = false;
+
 async function txAction(id, action) {
+  if (_MONTH_LOCKED) { alert('Месяц закрыт. Откройте его, чтобы вносить изменения.'); return; }
   const fd = new FormData(); fd.set('action', action);
   try {
     const resp = await fetch(`/finance/transactions/${id}/action`, { method:'POST', body:fd });
@@ -1078,6 +1158,54 @@ async function txAction(id, action) {
     if (action === 'paid') _alertsPaidLocal.add(id);
     setTimeout(() => location.reload(), 200);
   } catch (e) { alert('Ошибка: ' + e.message); }
+}
+
+async function rescheduleTx(id, currentDate) {
+  if (_MONTH_LOCKED) { alert('Месяц закрыт. Откройте его, чтобы вносить изменения.'); return; }
+  const val = prompt('Новая дата (ГГГГ-ММ-ДД):', (currentDate || TODAY).slice(0,10));
+  if (!val) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(val)) { alert('Формат: ГГГГ-ММ-ДД'); return; }
+  try {
+    const resp = await fetch(`/finance/transactions/${id}/edit`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ occurred_at: val }),
+    });
+    if (!resp.ok) { alert('Не удалось перенести — ' + resp.status); return; }
+    setTimeout(() => location.reload(), 200);
+  } catch (e) { alert('Ошибка: ' + e.message); }
+}
+
+// Carried-in overdue planned items from EARLIER months (#1). These fall off the
+// current calendar-month ledger, so they're surfaced as a pinned banner here.
+function renderOverdueCarryin() {
+  const cont = document.getElementById('overdue-carryin');
+  if (!cont) return;
+  const items = (_INJECTED && _INJECTED.overdue_planned) || [];
+  if (!items.length || !_IS_CURRENT_MONTH) { cont.innerHTML = ''; return; }
+  const totalRub = items.reduce((s,t) => s + (t.amount_rub || 0), 0);
+  const amtStr = viewCurrency === 'usd' ? fmtUsd(totalRub / FX_RATES.usd) : fmtRub(totalRub);
+  cont.innerHTML = `<div class="alerts" style="border-color:#b45309">
+    <div class="alerts-head" style="cursor:default">
+      <span class="alerts-icon" style="color:#fcd34d">⏰</span>
+      <span class="alerts-sum">${items.length} ${plural(items.length,'просроченный план','просроченных плана','просроченных планов')} из прошлых периодов · ${amtStr}</span>
+    </div>
+    <div>
+      ${items.map(t => {
+        const rub = t.amount_rub || 0;
+        const a = viewCurrency === 'usd' ? fmtUsd(rub / FX_RATES.usd) : fmtRub(rub);
+        return `<div class="alerts-row">
+          <span class="alerts-dot" style="background:#f59e0b"></span>
+          <span class="alerts-merchant">${esc(t.merchant_raw || '—')} <span style="color:var(--subtle)">· ${dateLabel(t.occurred_at)}</span></span>
+          <span class="alerts-amt">${t.direction === 'income' ? '+' : '−'}${a}</span>
+          <div class="alerts-actions">
+            <button class="alerts-btn alerts-btn-paid" onclick="txAction('${t.id}','paid')">✓ Оплачено</button>
+            <button class="alerts-btn alerts-btn-gray" onclick="rescheduleTx('${t.id}','${t.occurred_at}')">🗓 Перенести</button>
+            <button class="alerts-btn alerts-btn-gray" onclick="txAction('${t.id}','skip')">✕</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2118,7 +2246,7 @@ function updatePeriodLabel() {
 }
 
 function renderActiveTab() {
-  if (activeTab === 'monthly')   { renderHero(); renderAccounts(); renderStats(); renderAlerts(); renderIncome(); renderCashflowChart(); renderTagAnalytics(); renderLedger(); if (!_budgetsLoaded) loadBudgets(); }
+  if (activeTab === 'monthly')   { renderHero(); renderAccounts(); renderStats(); renderLockBar(); renderOverdueCarryin(); renderAlerts(); renderIncome(); renderCashflowChart(); renderTagAnalytics(); renderLedger(); if (!_budgetsLoaded) loadBudgets(); }
   else if (activeTab === 'quarterly') renderQuarterly();
   else if (activeTab === 'yearly')    renderYearly();
   else if (activeTab === 'annual')    renderAnnual();

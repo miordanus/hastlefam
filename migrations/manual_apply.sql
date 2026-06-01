@@ -737,3 +737,25 @@ CREATE INDEX IF NOT EXISTS ix_tag_budgets_household_month
   ON hastlefam.tag_budgets(household_id, month_key);
 
 COMMIT;
+
+-- =============================================================================
+-- Migration 0021: month_lock table
+-- Approve & lock a month: snapshot approved income/expense (RUB) and freeze
+-- that month's transactions from edits while is_locked.
+-- =============================================================================
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS hastlefam.month_lock (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES hastlefam.households(id),
+  month_key VARCHAR(7) NOT NULL,
+  is_locked BOOLEAN NOT NULL DEFAULT TRUE,
+  income_rub NUMERIC(14,2) NOT NULL DEFAULT 0,
+  expense_rub NUMERIC(14,2) NOT NULL DEFAULT 0,
+  locked_at TIMESTAMPTZ DEFAULT now(),
+  locked_by_user_id UUID REFERENCES hastlefam.users(id),
+  unlocked_at TIMESTAMPTZ,
+  CONSTRAINT uq_month_lock_household_month UNIQUE (household_id, month_key)
+);
+
+COMMIT;

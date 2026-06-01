@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.schemas.finance import (
+    AccountCreate,
     BalanceSnapshotCreate,
     BudgetUpsert,
+    BulkTagRequest,
     SQLImportRequest,
     TransactionCorrectionUpdate,
     TransactionCreate,
@@ -51,6 +53,68 @@ def _run_data_health(db: Session, household_id: str, current_user_id: str | None
     if _use_rest():
         return FinanceService(None).data_health_via_rest(household_id, current_user_id)
     return FinanceService(db).data_health(household_id, current_user_id)
+
+
+def _run_planned(db: Session, household_id: str) -> dict:
+    if _use_rest():
+        return FinanceService(None).planned_workbench_via_rest(household_id)
+    return FinanceService(db).planned_workbench(household_id)
+
+
+def _run_quality(db: Session, household_id: str) -> dict:
+    if _use_rest():
+        return FinanceService(None).untagged_transactions_via_rest(household_id)
+    return FinanceService(db).untagged_transactions(household_id)
+
+
+def _run_accounts(db: Session, household_id: str) -> dict:
+    if _use_rest():
+        return FinanceService(None).list_accounts_with_balances_via_rest(household_id)
+    return FinanceService(db).list_accounts_with_balances(household_id)
+
+
+def _is_locked(db: Session, household_id: str, ym: str) -> bool:
+    # Fail-open: if lock state can't be read (e.g. month_lock table not yet
+    # migrated), treat the month as open rather than 500-ing every write.
+    try:
+        if _use_rest():
+            return FinanceService.is_month_locked_via_rest(household_id, ym)
+        return FinanceService(db).is_month_locked(household_id, ym)
+    except Exception:
+        return False
+
+
+def _ym_of(d) -> str:
+    """YYYY-MM for a date/datetime."""
+    return f"{d.year:04d}-{d.month:02d}"
+
+
+def _assert_unlocked(db: Session, household_id: str, ym: str) -> None:
+    if household_id and _is_locked(db, household_id, ym):
+        raise HTTPException(status_code=423, detail="Месяц закрыт и заблокирован для изменений")
+
+
+def _tx_meta(db: Session, tx_id: str) -> tuple[str | None, str | None]:
+    """(household_id, YYYY-MM) for a transaction, for lock enforcement on edit/action.
+    Returns (None, None) if it can't be resolved (no guard applied)."""
+    try:
+        if _use_rest():
+            from app.infrastructure.supabase import SupabaseClient
+            s = get_settings()
+            with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+                rows = sb.get("transactions", {"select": "household_id,occurred_at", "id": f"eq.{tx_id}"})
+            if not rows:
+                return None, None
+            occ = (rows[0].get("occurred_at") or "")[:7]  # YYYY-MM
+            return rows[0].get("household_id"), (occ or None)
+        import uuid as _u
+        tid = _u.UUID(tx_id) if isinstance(tx_id, str) else tx_id
+        tx = db.get(Transaction, tid)
+        if tx is None or tx.occurred_at is None:
+            return (str(tx.household_id) if tx else None), None
+        return str(tx.household_id), _ym_of(tx.occurred_at)
+    except Exception:
+        return None, None
 
 router = APIRouter(prefix="/finance", tags=["finance"])
 
@@ -138,6 +202,7 @@ def report_page(
         {
             "report_data": report_data,
             "today_iso": _dt.date.today().isoformat(),
+            "household_id": household_id,
         },
     )
 
@@ -191,6 +256,144 @@ def health_data(
     return _run_data_health(db, household_id, getattr(request.state, "user_id", None))
 
 
+@router.get("/planned", response_class=HTMLResponse)
+def planned_page(
+    request: Request,
+    household_id: str = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Planned-items workbench (#2): close / reschedule / skip in one place."""
+    hid = household_id or getattr(request.state, "household_id", None)
+    data = _run_planned(db, hid) if hid else None
+    return templates.TemplateResponse(
+        request,
+        "planned.html",
+        {"planned_data": data, "household_id": hid},
+    )
+
+
+@router.get("/planned/data")
+def planned_data(
+    household_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """JSON endpoint — planned workbench payload."""
+    return _run_planned(db, household_id)
+
+
+@router.get("/quality", response_class=HTMLResponse)
+def quality_page(
+    request: Request,
+    household_id: str = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Quality tab (#4): bulk-tag untagged transactions fast, without opening each."""
+    hid = household_id or getattr(request.state, "household_id", None)
+    data = _run_quality(db, hid) if hid else None
+    return templates.TemplateResponse(
+        request,
+        "quality.html",
+        {"quality_data": data, "household_id": hid},
+    )
+
+
+@router.get("/quality/data")
+def quality_data(
+    household_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """JSON endpoint — untagged transactions + tag suggestions."""
+    return _run_quality(db, household_id)
+
+
+@router.post("/transactions/bulk_tag")
+def bulk_tag(body: BulkTagRequest, db: Session = Depends(get_db)) -> dict:
+    """Apply many {tx_id, tag} assignments at once (Quality tab). Dual-path."""
+    assignments = [a.model_dump() for a in body.assignments]
+    if _use_rest():
+        return FinanceService.bulk_tag_via_rest(assignments)
+    return FinanceService(db).bulk_tag(assignments)
+
+
+@router.get("/accounts", response_class=HTMLResponse)
+def accounts_page(
+    request: Request,
+    household_id: str = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Accounts management (#5): add accounts and see the merge to a single RUB total."""
+    hid = household_id or getattr(request.state, "household_id", None)
+    data = _run_accounts(db, hid) if hid else None
+    return templates.TemplateResponse(
+        request,
+        "accounts.html",
+        {"accounts_data": data, "household_id": hid},
+    )
+
+
+@router.get("/accounts/data")
+def accounts_data(
+    household_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """JSON endpoint — accounts with per-account RUB + consolidated total."""
+    return _run_accounts(db, household_id)
+
+
+@router.post("/accounts")
+def create_account(body: AccountCreate, db: Session = Depends(get_db)) -> dict:
+    """Create an account from the web UI. Dual-path (REST on Vercel, else SQLAlchemy)."""
+    if _use_rest():
+        return FinanceService(None).create_account_via_rest(
+            body.household_id, body.name, body.currency,
+            owner_user_id=body.owner_user_id, is_shared=body.is_shared,
+        )
+    from app.domain.enums import Currency as _Cur
+    acc = FinanceService(db).create_account(
+        body.household_id, body.name, _Cur(body.currency),
+        owner_user_id=body.owner_user_id, is_shared=body.is_shared,
+    )
+    return {"ok": True, "id": str(acc.id)}
+
+
+@router.get("/months/lock/status")
+def month_lock_status(
+    household_id: str = Query(...),
+    month: str = Query(..., description="YYYY-MM"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Lock state + approved totals snapshot for a month (#6)."""
+    if _use_rest():
+        return FinanceService(None).month_lock_status_via_rest(household_id, month)
+    return FinanceService(db).month_lock_status(household_id, month)
+
+
+@router.post("/months/lock")
+def lock_month(
+    request: Request,
+    household_id: str = Form(...),
+    month: str = Form(..., description="YYYY-MM"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Approve & lock a month: snapshot actual income/expense and freeze edits (#6)."""
+    uid = getattr(request.state, "user_id", None)
+    if _use_rest():
+        return FinanceService(None).lock_month_via_rest(household_id, month, uid)
+    return FinanceService(db).lock_month(household_id, month, uid)
+
+
+@router.post("/months/unlock")
+def unlock_month(
+    household_id: str = Form(...),
+    month: str = Form(..., description="YYYY-MM"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reopen a previously locked month for edits (#6)."""
+    if _use_rest():
+        return FinanceService(None).unlock_month_via_rest(household_id, month)
+    return FinanceService(db).unlock_month(household_id, month)
+
+
 @router.get("/cashflow")
 def cashflow_monthly(
     household_id: str = Query(...),
@@ -226,21 +429,27 @@ def cashflow_monthly(
 
 
 @router.post("/transactions/{tx_id}/action")
-def transaction_action(tx_id: str, action: str = Form(...)) -> dict:
+def transaction_action(tx_id: str, action: str = Form(...), db: Session = Depends(get_db)) -> dict:
     """Inline action for ledger rows. action='paid' converts a planned tx to actual;
-    action='skip' marks it skipped. Requires Supabase REST creds."""
-    if not _use_rest():
-        raise HTTPException(status_code=503, detail="Supabase REST not configured")
+    action='skip' marks it skipped. Dual-path (REST on Vercel, else SQLAlchemy)."""
     if action == "paid":
         body = {"is_planned": False}
     elif action == "skip":
         body = {"is_skipped": True}
     else:
         raise HTTPException(status_code=400, detail="action must be 'paid' or 'skip'")
-    from app.infrastructure.supabase import SupabaseClient
-    s = get_settings()
-    with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
-        sb.patch("transactions", {"id": f"eq.{tx_id}"}, body)
+    hh, ym = _tx_meta(db, tx_id)
+    if ym:
+        _assert_unlocked(db, hh, ym)
+    if _use_rest():
+        from app.infrastructure.supabase import SupabaseClient
+        s = get_settings()
+        with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
+            sb.patch("transactions", {"id": f"eq.{tx_id}"}, body)
+        return {"ok": True, "tx_id": tx_id, "action": action}
+    tx = FinanceService(db).mark_transaction(tx_id, **body)
+    if tx is None:
+        raise HTTPException(status_code=404, detail="transaction not found")
     return {"ok": True, "tx_id": tx_id, "action": action}
 
 
@@ -290,6 +499,7 @@ def update_correction(
 @router.post("/transactions")
 def create_transaction(body: TransactionCreate, db: Session = Depends(get_db)) -> dict:
     """Add a transaction from the web UI. REST write on Vercel, else SQLAlchemy."""
+    _assert_unlocked(db, body.household_id, _ym_of(body.occurred_at))
     if _use_rest():
         import uuid as _u
 
@@ -340,6 +550,13 @@ def create_transaction(body: TransactionCreate, db: Session = Depends(get_db)) -
 def edit_transaction(tx_id: str, body: TransactionUpdate, db: Session = Depends(get_db)) -> dict:
     """Edit a transaction's fields from the web UI. REST or SQLAlchemy."""
     fields = body.model_dump(exclude_unset=True)
+    # Lock enforcement: block edits within a locked month, and block rescheduling
+    # a transaction into or out of a locked month.
+    hh, ym = _tx_meta(db, tx_id)
+    if ym:
+        _assert_unlocked(db, hh, ym)
+    if fields.get("occurred_at") and hh:
+        _assert_unlocked(db, hh, _ym_of(fields["occurred_at"]))
     if _use_rest():
         from app.domain.enums import Currency, TransactionDirection
         patch: dict = {}

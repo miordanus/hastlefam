@@ -123,6 +123,29 @@ def _rub_on_date(
     return amount  # silent 1:1; backfill fx_rates if this matters
 
 
+def _sum_balances_rub(bal_accounts: list[dict], convert) -> tuple[float, bool]:
+    """Consolidate per-account latest balances into a single RUB total.
+
+    `bal_accounts` rows carry `last_balance` + `currency` (the shape produced by
+    both data_health variants). `convert(amount: float, currency: str) -> float | None`
+    returns the RUB equivalent, or None when no rate is available. Returns
+    (total_rub, fx_complete); fx_complete is False if any non-RUB balance lacked a
+    rate (so the UI can flag a missing rate instead of hiding a silent 1:1).
+    """
+    total = 0.0
+    fx_complete = True
+    for a in bal_accounts:
+        bal = a.get("last_balance")
+        if bal is None:
+            continue
+        rub = convert(float(bal), (a.get("currency") or "rub"))
+        if rub is None:
+            fx_complete = False
+        else:
+            total += rub
+    return round(total, 2), fx_complete
+
+
 class FinanceService:
     def __init__(self, db: Session):
         self.db = db
@@ -426,6 +449,324 @@ class FinanceService:
             for r in rows
         ]
 
+    def overdue_planned_items(self, household_id: str) -> list[dict[str, Any]]:
+        """Planned, not-skipped transactions whose date has already passed
+        (occurred_at <= today). These fall off the current calendar-month tab AND
+        outside the forward cashflow window, so they must be surfaced explicitly —
+        the root cause of "planned items vanish" (#1). Income+expense only.
+        Mirror any change in overdue_planned_items_via_rest()."""
+        from app.application.services.fx_service import convert_to_rub
+
+        today = datetime.now(timezone.utc).date()
+        today_end = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.is_planned.is_(True),
+                Transaction.is_skipped.is_(False),
+                Transaction.occurred_at <= today_end,
+                Transaction.direction.in_(
+                    [TransactionDirection.INCOME, TransactionDirection.EXPENSE]
+                ),
+            )
+            .order_by(Transaction.occurred_at.asc())
+            .all()
+        )
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            cur = r.currency.value if r.currency else "rub"
+            rub = convert_to_rub(Decimal(str(r.amount)), cur, r.occurred_at.date(), self.db)
+            out.append({
+                "id": str(r.id),
+                "occurred_at": r.occurred_at.date().isoformat(),
+                "direction": r.direction.value,
+                "amount": float(r.amount),
+                "currency": cur,
+                "merchant_raw": r.merchant_raw or "",
+                "primary_tag": r.primary_tag,
+                "account_id": str(r.account_id) if r.account_id else None,
+                "amount_rub": float(rub) if rub is not None else None,
+            })
+        return out
+
+    def overdue_planned_items_via_rest(self, household_id: str) -> list[dict[str, Any]]:
+        """REST variant of overdue_planned_items(). Keep in sync."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        today = date.today()
+        today_end = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
+
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rows = sb.get("transactions", {
+                "select": "id,occurred_at,direction,amount,currency,merchant_raw,primary_tag,account_id",
+                "household_id": f"eq.{household_id}",
+                "is_planned": "eq.true",
+                "is_skipped": "eq.false",
+                "occurred_at": f"lte.{today_end.isoformat()}",
+                "direction": "in.(income,expense)",
+                "order": "occurred_at.asc",
+            })
+            fx_window_start = (today - timedelta(days=400)).isoformat()
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{today.isoformat()}"],
+                "order": "date.desc",
+            })
+        fx_by_cur = _build_fx_lookup(fx_rows)
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            occ = (r.get("occurred_at") or "")[:10]
+            cur = r.get("currency") or "rub"
+            out.append({
+                "id": r["id"],
+                "occurred_at": occ,
+                "direction": r["direction"],
+                "amount": float(r["amount"]),
+                "currency": cur,
+                "merchant_raw": r.get("merchant_raw") or "",
+                "primary_tag": r.get("primary_tag"),
+                "account_id": r.get("account_id"),
+                "amount_rub": _rub_on_date(float(r["amount"]), cur, occ, fx_by_cur),
+            })
+        return out
+
+    def planned_workbench(self, household_id: str) -> dict[str, Any]:
+        """All actionable planned items (#2), grouped into overdue vs upcoming, so the
+        user can work them through (close / reschedule / skip) in one place rather than
+        hunting across views. Mirror in planned_workbench_via_rest()."""
+        from app.application.services.fx_service import convert_to_rub
+
+        today = datetime.now(timezone.utc).date()
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+
+        acc_names = {
+            str(a.id): a.name
+            for a in self.db.query(Account).filter(Account.household_id == hid).all()
+        }
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.is_planned.is_(True),
+                Transaction.is_skipped.is_(False),
+                Transaction.direction.in_(
+                    [TransactionDirection.INCOME, TransactionDirection.EXPENSE]
+                ),
+            )
+            .order_by(Transaction.occurred_at.asc())
+            .all()
+        )
+        overdue: list[dict[str, Any]] = []
+        upcoming: list[dict[str, Any]] = []
+        for r in rows:
+            occ = r.occurred_at.date()
+            cur = r.currency.value if r.currency else "rub"
+            rub = convert_to_rub(Decimal(str(r.amount)), cur, occ, self.db)
+            item = {
+                "id": str(r.id),
+                "occurred_at": occ.isoformat(),
+                "direction": r.direction.value,
+                "amount": float(r.amount),
+                "currency": cur,
+                "merchant_raw": r.merchant_raw or "",
+                "primary_tag": r.primary_tag,
+                "account_id": str(r.account_id) if r.account_id else None,
+                "account_name": acc_names.get(str(r.account_id)),
+                "amount_rub": float(rub) if rub is not None else None,
+            }
+            (overdue if occ <= today else upcoming).append(item)
+        return {
+            "today": today.isoformat(),
+            "overdue": overdue,
+            "upcoming": upcoming,
+            "overdue_rub": round(sum(i["amount_rub"] or 0 for i in overdue), 2),
+            "upcoming_rub": round(sum(i["amount_rub"] or 0 for i in upcoming), 2),
+        }
+
+    def planned_workbench_via_rest(self, household_id: str) -> dict[str, Any]:
+        """REST variant of planned_workbench(). Keep in sync."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        today = date.today()
+
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            accounts = sb.get("accounts", {
+                "select": "id,name",
+                "household_id": f"eq.{household_id}",
+            })
+            rows = sb.get("transactions", {
+                "select": "id,occurred_at,direction,amount,currency,merchant_raw,primary_tag,account_id",
+                "household_id": f"eq.{household_id}",
+                "is_planned": "eq.true",
+                "is_skipped": "eq.false",
+                "direction": "in.(income,expense)",
+                "order": "occurred_at.asc",
+            })
+            fx_window_start = (today - timedelta(days=400)).isoformat()
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{today.isoformat()}"],
+                "order": "date.desc",
+            })
+        fx_by_cur = _build_fx_lookup(fx_rows)
+        acc_names = {a["id"]: a["name"] for a in accounts}
+
+        overdue: list[dict[str, Any]] = []
+        upcoming: list[dict[str, Any]] = []
+        today_iso = today.isoformat()
+        for r in rows:
+            occ = (r.get("occurred_at") or "")[:10]
+            cur = r.get("currency") or "rub"
+            item = {
+                "id": r["id"],
+                "occurred_at": occ,
+                "direction": r["direction"],
+                "amount": float(r["amount"]),
+                "currency": cur,
+                "merchant_raw": r.get("merchant_raw") or "",
+                "primary_tag": r.get("primary_tag"),
+                "account_id": r.get("account_id"),
+                "account_name": acc_names.get(r.get("account_id")),
+                "amount_rub": _rub_on_date(float(r["amount"]), cur, occ, fx_by_cur),
+            }
+            (overdue if occ <= today_iso else upcoming).append(item)
+        return {
+            "today": today_iso,
+            "overdue": overdue,
+            "upcoming": upcoming,
+            "overdue_rub": round(sum(i["amount_rub"] or 0 for i in overdue), 2),
+            "upcoming_rub": round(sum(i["amount_rub"] or 0 for i in upcoming), 2),
+        }
+
+    # ─── Quality: untagged transactions + bulk tagging (#4) ───────────────────
+
+    def untagged_transactions(self, household_id: str, limit: int = 200) -> dict[str, Any]:
+        """Untagged real transactions (primary_tag IS NULL, honoring ЗАКОН) with a
+        suggested tag from the household's merchant→tag rules. The canonical
+        "untagged" definition matches data_health — NOT the legacy category_id filter.
+        Mirror in untagged_transactions_via_rest()."""
+        from app.infrastructure.db.models import MerchantTagRule
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        rules = {
+            r.merchant_pattern: r.tag
+            for r in self.db.query(MerchantTagRule).filter(
+                MerchantTagRule.household_id == hid,
+                MerchantTagRule.is_active.is_(True),
+            ).all()
+        }
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.primary_tag.is_(None),
+                Transaction.is_planned.is_(False),
+                Transaction.is_internal_transfer.is_(False),
+                Transaction.direction != TransactionDirection.EXCHANGE,
+            )
+            .order_by(Transaction.occurred_at.desc())
+            .limit(limit)
+            .all()
+        )
+        items = [
+            {
+                "id": str(tx.id),
+                "occurred_at": tx.occurred_at.date().isoformat() if tx.occurred_at else None,
+                "direction": tx.direction.value,
+                "amount": float(tx.amount),
+                "currency": tx.currency.value if tx.currency else "rub",
+                "merchant_raw": tx.merchant_raw or "",
+                "suggested_tag": rules.get((tx.merchant_raw or "").strip().lower()),
+            }
+            for tx in rows
+        ]
+        known_tags = sorted(set(rules.values()))
+        return {"count": len(items), "items": items, "known_tags": known_tags}
+
+    def untagged_transactions_via_rest(self, household_id: str, limit: int = 200) -> dict[str, Any]:
+        """REST variant of untagged_transactions(). Keep in sync."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rules_rows = sb.get("merchant_tag_rules", {
+                "select": "merchant_pattern,tag,is_active",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+            })
+            rows = sb.get("transactions", {
+                "select": "id,occurred_at,direction,amount,currency,merchant_raw",
+                "household_id": f"eq.{household_id}",
+                "primary_tag": "is.null",
+                "is_planned": "eq.false",
+                "is_internal_transfer": "eq.false",
+                "direction": "neq.exchange",
+                "order": "occurred_at.desc",
+                "limit": str(limit),
+            })
+        rules = {r["merchant_pattern"]: r["tag"] for r in rules_rows}
+        items = [
+            {
+                "id": r["id"],
+                "occurred_at": (r.get("occurred_at") or "")[:10] or None,
+                "direction": r["direction"],
+                "amount": float(r["amount"]),
+                "currency": r.get("currency") or "rub",
+                "merchant_raw": r.get("merchant_raw") or "",
+                "suggested_tag": rules.get((r.get("merchant_raw") or "").strip().lower()),
+            }
+            for r in rows
+        ]
+        return {"count": len(items), "items": items, "known_tags": sorted(set(rules.values()))}
+
+    def bulk_tag(self, assignments: list[dict[str, Any]]) -> dict[str, Any]:
+        """Apply {tx_id, tag} assignments in one shot (SQLAlchemy path). Tags are
+        normalized via _clean_tag. Returns the number updated."""
+        updated = 0
+        for a in assignments:
+            tag = self._clean_tag(a.get("tag"))
+            if not tag:
+                continue
+            tx = self.update_transaction(a["tx_id"], primary_tag=tag)
+            if tx is not None:
+                updated += 1
+        return {"ok": True, "updated": updated}
+
+    @staticmethod
+    def bulk_tag_via_rest(assignments: list[dict[str, Any]]) -> dict[str, Any]:
+        """REST variant: group ids by normalized tag and PATCH each group with one
+        id=in.(...) call. Keep in sync with bulk_tag()."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        by_tag: dict[str, list[str]] = {}
+        for a in assignments:
+            tag = FinanceService._clean_tag(a.get("tag"))
+            if not tag:
+                continue
+            by_tag.setdefault(tag, []).append(str(a["tx_id"]))
+        if not by_tag:
+            return {"ok": True, "updated": 0}
+        settings = get_settings()
+        updated = 0
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            for tag, ids in by_tag.items():
+                sb.patch("transactions", {"id": f"in.({','.join(ids)})"}, {"primary_tag": tag})
+                updated += len(ids)
+        return {"ok": True, "updated": updated}
+
     # ─── Accounts ─────────────────────────────────────────────────────────────
 
     def get_or_create_default_account(self, household_id: str) -> Account:
@@ -477,6 +818,395 @@ class FinanceService:
         self.db.add(acc)
         self.db.commit()
         return acc
+
+    def create_account_via_rest(
+        self, household_id: str, name: str, currency: str,
+        owner_user_id: str | None = None, is_shared: bool = True,
+    ) -> dict[str, Any]:
+        """REST variant of create_account(). Keep in sync."""
+        import uuid as _u
+
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+        aid = str(_u.uuid4())
+        row = {
+            "id": aid,
+            "household_id": household_id,
+            "owner_user_id": owner_user_id,
+            "name": name,
+            "currency": Currency(currency).value,
+            "is_shared": bool(is_shared),
+            "is_active": True,
+        }
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            sb.post("accounts", [row])
+        return {"ok": True, "id": aid}
+
+    def list_accounts_with_balances(self, household_id: str) -> dict[str, Any]:
+        """Per-account latest balance + RUB equivalent, plus a consolidated RUB total
+        (#5). Reuses the data-health balance shape and the FX engine. `fx_complete`
+        flags when a non-RUB balance lacked a rate (surfaced, not silently 1:1).
+        Mirror in list_accounts_with_balances_via_rest()."""
+        from app.application.services.fx_service import convert_to_rub
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        today = datetime.now(timezone.utc).date()
+        user_names = {
+            u.id: u.name
+            for u in self.db.query(User).filter(User.household_id == hid).all()
+        }
+        accounts = (
+            self.db.query(Account)
+            .filter(Account.household_id == hid, Account.is_active.is_(True))
+            .order_by(Account.name.asc())
+            .all()
+        )
+        items: list[dict[str, Any]] = []
+        bal_for_sum: list[dict[str, Any]] = []
+        for acc in accounts:
+            snap = (
+                self.db.query(BalanceSnapshot)
+                .filter(BalanceSnapshot.account_id == acc.id)
+                .order_by(BalanceSnapshot.created_at.desc())
+                .first()
+            )
+            cur = acc.currency.value
+            native = float(snap.actual_balance) if snap and snap.actual_balance is not None else None
+            rub = None
+            if native is not None:
+                conv = convert_to_rub(Decimal(str(native)), cur, today, self.db) if cur.lower() != "rub" else Decimal(str(native))
+                rub = float(conv) if conv is not None else None
+            items.append({
+                "id": str(acc.id),
+                "name": acc.name,
+                "currency": cur,
+                "is_shared": acc.is_shared,
+                "owner_user_id": str(acc.owner_user_id) if acc.owner_user_id else None,
+                "owner_name": user_names.get(acc.owner_user_id),
+                "balance_native": native,
+                "balance_rub": rub,
+                "as_of": snap.created_at.date().isoformat() if snap else None,
+            })
+            bal_for_sum.append({"last_balance": native, "currency": cur})
+
+        def _conv(amount: float, c: str) -> float | None:
+            if (c or "rub").lower() == "rub":
+                return amount
+            r = convert_to_rub(Decimal(str(amount)), c, today, self.db)
+            return float(r) if r is not None else None
+
+        consolidated_rub, fx_complete = _sum_balances_rub(bal_for_sum, _conv)
+        return {
+            "base_currency": "rub",
+            "accounts": items,
+            "consolidated_rub": consolidated_rub,
+            "fx_complete": fx_complete,
+            "users": [{"id": str(uid), "name": name} for uid, name in user_names.items()],
+        }
+
+    def list_accounts_with_balances_via_rest(self, household_id: str) -> dict[str, Any]:
+        """REST variant of list_accounts_with_balances(). Keep in sync."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        today = date.today()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            users = sb.get("users", {"select": "id,name", "household_id": f"eq.{household_id}"})
+            accounts = sb.get("accounts", {
+                "select": "id,name,currency,is_shared,owner_user_id",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+                "order": "name.asc",
+            })
+            account_ids = [a["id"] for a in accounts]
+            snap_rows = []
+            if account_ids:
+                snap_rows = sb.get("balance_snapshots", {
+                    "select": "account_id,actual_balance,created_at",
+                    "account_id": f"in.({','.join(account_ids)})",
+                    "order": "account_id.asc,created_at.desc",
+                })
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "order": "date.desc",
+            })
+        fx_by_cur = _build_fx_lookup(fx_rows)
+        user_names = {u["id"]: u["name"] for u in users}
+        latest_snap: dict[str, dict] = {}
+        for r in snap_rows:
+            latest_snap.setdefault(r["account_id"], r)
+
+        def _conv(amount: float, c: str) -> float | None:
+            cc = (c or "rub").lower()
+            if cc == "rub":
+                return amount
+            if cc == "usdt":
+                cc = "usd"
+            rates = fx_by_cur.get(cc, [])
+            return amount * rates[0][1] if rates else None
+
+        items: list[dict[str, Any]] = []
+        bal_for_sum: list[dict[str, Any]] = []
+        for a in accounts:
+            snap = latest_snap.get(a["id"])
+            native = float(snap["actual_balance"]) if snap and snap.get("actual_balance") is not None else None
+            cur = a.get("currency") or "rub"
+            rub = None
+            if native is not None:
+                conv = _conv(native, cur)
+                rub = round(conv, 2) if conv is not None else None
+            items.append({
+                "id": a["id"],
+                "name": a["name"],
+                "currency": cur,
+                "is_shared": a.get("is_shared"),
+                "owner_user_id": a.get("owner_user_id"),
+                "owner_name": user_names.get(a.get("owner_user_id")),
+                "balance_native": native,
+                "balance_rub": rub,
+                "as_of": (snap.get("created_at") or "")[:10] if snap else None,
+            })
+            bal_for_sum.append({"last_balance": native, "currency": cur})
+
+        consolidated_rub, fx_complete = _sum_balances_rub(bal_for_sum, _conv)
+        return {
+            "base_currency": "rub",
+            "accounts": items,
+            "consolidated_rub": consolidated_rub,
+            "fx_complete": fx_complete,
+            "users": [{"id": uid, "name": name} for uid, name in user_names.items()],
+        }
+
+    # ─── Approve & lock month (#6) ────────────────────────────────────────────
+
+    def _month_actual_totals_rub(self, hid, year: int, month: int) -> tuple[float, float]:
+        """Actual (ЗАКОН) income/expense for a month, summed in RUB."""
+        from app.application.services.fx_service import convert_to_rub
+
+        last_day = calendar.monthrange(year, month)[1]
+        start_dt = datetime(year, month, 1, tzinfo=timezone.utc)
+        end_dt = datetime(year, month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.occurred_at >= start_dt,
+                Transaction.occurred_at <= end_dt,
+                Transaction.is_planned.is_(False),
+                Transaction.is_internal_transfer.is_(False),
+                Transaction.is_skipped.is_(False),
+                Transaction.direction.in_([TransactionDirection.INCOME, TransactionDirection.EXPENSE]),
+            )
+            .all()
+        )
+        income = expense = 0.0
+        for r in rows:
+            cur = r.currency.value if r.currency else "rub"
+            rub = convert_to_rub(Decimal(str(r.amount)), cur, r.occurred_at.date(), self.db)
+            val = float(rub) if rub is not None else 0.0
+            if r.direction == TransactionDirection.INCOME:
+                income += val
+            else:
+                expense += val
+        return round(income, 2), round(expense, 2)
+
+    @staticmethod
+    def _lock_payload(row) -> dict[str, Any]:
+        if row is None:
+            return {"locked": False}
+        as_dict = lambda d: d.isoformat() if d else None  # noqa: E731
+        return {
+            "locked": bool(row.is_locked),
+            "month_key": row.month_key,
+            "income_rub": float(row.income_rub),
+            "expense_rub": float(row.expense_rub),
+            "locked_at": as_dict(row.locked_at),
+            "unlocked_at": as_dict(row.unlocked_at),
+        }
+
+    def month_lock_status(self, household_id: str, month_key: str) -> dict[str, Any]:
+        """Lock state for a month (#6). Mirror in month_lock_status_via_rest()."""
+        from app.infrastructure.db.models import MonthLock
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        row = (
+            self.db.query(MonthLock)
+            .filter(MonthLock.household_id == hid, MonthLock.month_key == month_key)
+            .first()
+        )
+        return self._lock_payload(row)
+
+    def is_month_locked(self, household_id: str, month_key: str) -> bool:
+        from app.infrastructure.db.models import MonthLock
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        row = (
+            self.db.query(MonthLock)
+            .filter(MonthLock.household_id == hid, MonthLock.month_key == month_key)
+            .first()
+        )
+        return bool(row and row.is_locked)
+
+    def lock_month(self, household_id: str, month_key: str, user_id: str | None = None) -> dict[str, Any]:
+        """Snapshot the month's approved actual totals and freeze it."""
+        from app.infrastructure.db.models import MonthLock
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        year, month = (int(x) for x in month_key.split("-"))
+        income, expense = self._month_actual_totals_rub(hid, year, month)
+        row = (
+            self.db.query(MonthLock)
+            .filter(MonthLock.household_id == hid, MonthLock.month_key == month_key)
+            .first()
+        )
+        if row is None:
+            row = MonthLock(id=_uuid.uuid4(), household_id=hid, month_key=month_key)
+            self.db.add(row)
+        row.is_locked = True
+        row.income_rub = Decimal(str(income))
+        row.expense_rub = Decimal(str(expense))
+        row.locked_at = datetime.now(timezone.utc)
+        row.locked_by_user_id = _uuid.UUID(user_id) if user_id else None
+        row.unlocked_at = None
+        self.db.commit()
+        return self._lock_payload(row)
+
+    def unlock_month(self, household_id: str, month_key: str) -> dict[str, Any]:
+        from app.infrastructure.db.models import MonthLock
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        row = (
+            self.db.query(MonthLock)
+            .filter(MonthLock.household_id == hid, MonthLock.month_key == month_key)
+            .first()
+        )
+        if row is not None:
+            row.is_locked = False
+            row.unlocked_at = datetime.now(timezone.utc)
+            self.db.commit()
+        return self._lock_payload(row)
+
+    # REST siblings ----------------------------------------------------------
+
+    def month_lock_status_via_rest(self, household_id: str, month_key: str) -> dict[str, Any]:
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rows = sb.get("month_lock", {
+                "select": "month_key,is_locked,income_rub,expense_rub,locked_at,unlocked_at",
+                "household_id": f"eq.{household_id}",
+                "month_key": f"eq.{month_key}",
+            })
+        return self._lock_payload_rest(rows[0] if rows else None)
+
+    @staticmethod
+    def _lock_payload_rest(row: dict | None) -> dict[str, Any]:
+        if row is None:
+            return {"locked": False}
+        return {
+            "locked": bool(row.get("is_locked")),
+            "month_key": row.get("month_key"),
+            "income_rub": float(row.get("income_rub") or 0),
+            "expense_rub": float(row.get("expense_rub") or 0),
+            "locked_at": row.get("locked_at"),
+            "unlocked_at": row.get("unlocked_at"),
+        }
+
+    @staticmethod
+    def is_month_locked_via_rest(household_id: str, month_key: str) -> bool:
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rows = sb.get("month_lock", {
+                "select": "is_locked",
+                "household_id": f"eq.{household_id}",
+                "month_key": f"eq.{month_key}",
+            })
+        return bool(rows and rows[0].get("is_locked"))
+
+    def lock_month_via_rest(self, household_id: str, month_key: str, user_id: str | None = None) -> dict[str, Any]:
+        import uuid as _u
+
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+        year, month = (int(x) for x in month_key.split("-"))
+        income, expense = self._month_actual_totals_rub_via_rest(household_id, year, month)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            existing = sb.get("month_lock", {
+                "select": "id",
+                "household_id": f"eq.{household_id}",
+                "month_key": f"eq.{month_key}",
+            })
+            body = {
+                "is_locked": True,
+                "income_rub": income,
+                "expense_rub": expense,
+                "locked_at": now_iso,
+                "locked_by_user_id": user_id,
+                "unlocked_at": None,
+            }
+            if existing:
+                sb.patch("month_lock", {"id": f"eq.{existing[0]['id']}"}, body)
+            else:
+                row = {"id": str(_u.uuid4()), "household_id": household_id, "month_key": month_key, **body}
+                sb.post("month_lock", [row])
+        return {"locked": True, "month_key": month_key, "income_rub": income,
+                "expense_rub": expense, "locked_at": now_iso, "unlocked_at": None}
+
+    def unlock_month_via_rest(self, household_id: str, month_key: str) -> dict[str, Any]:
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            sb.patch("month_lock",
+                     {"household_id": f"eq.{household_id}", "month_key": f"eq.{month_key}"},
+                     {"is_locked": False, "unlocked_at": now_iso})
+        return {"locked": False, "month_key": month_key, "unlocked_at": now_iso}
+
+    def _month_actual_totals_rub_via_rest(self, household_id: str, year: int, month: int) -> tuple[float, float]:
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        last_day = calendar.monthrange(year, month)[1]
+        start_iso = datetime(year, month, 1, tzinfo=timezone.utc).isoformat()
+        end_iso = datetime(year, month, last_day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rows = sb.get("transactions", {
+                "select": "occurred_at,direction,amount,currency",
+                "household_id": f"eq.{household_id}",
+                "occurred_at": [f"gte.{start_iso}", f"lte.{end_iso}"],
+                "is_planned": "eq.false",
+                "is_internal_transfer": "eq.false",
+                "is_skipped": "eq.false",
+                "direction": "in.(income,expense)",
+            })
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "order": "date.desc",
+            })
+        fx_by_cur = _build_fx_lookup(fx_rows)
+        income = expense = 0.0
+        for r in rows:
+            occ = (r.get("occurred_at") or "")[:10]
+            val = _rub_on_date(float(r["amount"]), r.get("currency"), occ, fx_by_cur)
+            if (r.get("direction") or "").lower() == "income":
+                income += val
+            else:
+                expense += val
+        return round(income, 2), round(expense, 2)
 
     def update_balance_snapshot(
         self,
@@ -620,6 +1350,25 @@ class FinanceService:
             tx.account_id = _uuid.UUID(aid) if isinstance(aid, str) else aid
         if "merchant" in fields and fields["merchant"] is not None:
             tx.merchant_raw = fields["merchant"]
+        self.db.commit()
+        return tx
+
+    def mark_transaction(
+        self, tx_id: str, *, is_planned: bool | None = None, is_skipped: bool | None = None
+    ) -> Transaction | None:
+        """Toggle the planned/skipped flags (the web ledger 'paid'/'skip' actions).
+        SQLAlchemy counterpart of the REST sb.patch in /transactions/{id}/action."""
+        try:
+            tid = _uuid.UUID(tx_id) if isinstance(tx_id, str) else tx_id
+        except ValueError:
+            return None
+        tx = self.db.get(Transaction, tid)
+        if tx is None:
+            return None
+        if is_planned is not None:
+            tx.is_planned = is_planned
+        if is_skipped is not None:
+            tx.is_skipped = is_skipped
         self.db.commit()
         return tx
 
@@ -1066,9 +1815,20 @@ class FinanceService:
             for t, v in sorted(tag_map.items(), key=lambda x: -x[1])
         ]
 
+        # Overdue planned items from *earlier* months are carried into the current
+        # month view so they can't silently vanish (#1). In-month planned rows already
+        # appear in `transactions` with status overdue/planned.
+        today_d = date.today()
+        is_current = (year == today_d.year and month == today_d.month)
+        overdue_planned = self.overdue_planned_items(str(hid)) if is_current else []
+        month_lock = self.month_lock_status(str(hid), f"{year:04d}-{month:02d}")
+
         return {
             "year": year,
             "month": month,
+            "is_current_month": is_current,
+            "overdue_planned": overdue_planned,
+            "month_lock": month_lock,
             "accounts": [
                 {"id": str(a.id), "name": a.name, "currency": a.currency.value}
                 for a in accounts
@@ -1188,12 +1948,7 @@ class FinanceService:
             except ValueError:
                 occurred = today
 
-            if tx["is_planned"]:
-                status = "overdue" if occurred <= today else "planned"
-            elif "[сюрприз]" in (tx.get("merchant_raw") or "").lower() or "[surprise]" in (tx.get("merchant_raw") or "").lower():
-                status = "unplanned"
-            else:
-                status = "actual"
+            status = _status_for(tx["is_planned"], occurred, tx.get("merchant_raw"), today)
 
             if not tx["is_planned"] and tx["direction"] == "expense":
                 tag = tx.get("primary_tag") or "(без тега)"
@@ -1289,11 +2044,17 @@ class FinanceService:
                 "balance_as_of": latest.get("as_of"),
             })
 
+        # Overdue planned items from earlier months, carried into the current view (#1).
+        overdue_planned = self.overdue_planned_items_via_rest(household_id) if is_current else []
+        month_lock = self.month_lock_status_via_rest(household_id, f"{year:04d}-{month:02d}")
+
         return {
             "year": year,
             "month": month,
             "household_id": household_id,
             "is_current_month": is_current,
+            "overdue_planned": overdue_planned,
+            "month_lock": month_lock,
             "balance_value_rub": balance_value_rub,
             "start_balance_rub": total_start_rub,
             "forecast_eom_rub": forecast_eom_rub,
@@ -2091,9 +2852,46 @@ class FinanceService:
             + sum(1 for s in sources if s["status"] in ("amber", "red"))
         )
 
+        # ── "Сегодня" snapshot — the clear-picture-today block (#7).
+        from app.application.services.fx_service import convert_to_rub
+        today_d = now.date()
+
+        def _conv(amount: float, cur: str) -> float | None:
+            if (cur or "rub").lower() == "rub":
+                return amount
+            r = convert_to_rub(Decimal(str(amount)), cur, today_d, self.db)
+            return float(r) if r is not None else None
+
+        consolidated_rub, fx_complete = _sum_balances_rub(bal_accounts, _conv)
+        overdue = self.overdue_planned_items(str(hid))
+        overdue_rub = sum(o["amount_rub"] for o in overdue if o.get("amount_rub") is not None)
+        upcoming_planned_count = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.is_planned.is_(True),
+                Transaction.is_skipped.is_(False),
+                Transaction.occurred_at > datetime(today_d.year, today_d.month, today_d.day, 23, 59, 59, tzinfo=timezone.utc),
+                Transaction.direction.in_([TransactionDirection.INCOME, TransactionDirection.EXPENSE]),
+            )
+            .count()
+        )
+        current_mk = f"{today_d.year:04d}-{today_d.month:02d}"
+        ml = self.month_lock_status(str(hid), current_mk)
+        today_block = {
+            "consolidated_rub": consolidated_rub,
+            "fx_complete": fx_complete,
+            "untagged_count": uncat_count,
+            "overdue_count": len(overdue),
+            "overdue_rub": round(overdue_rub, 2),
+            "upcoming_planned_count": upcoming_planned_count,
+            "month_lock": ml if ml.get("locked") else None,
+        }
+
         return {
             "generated_at": now.isoformat(),
             "attention_count": attention_count,
+            "today": today_block,
             "uncategorized": {
                 "count": uncat_count,
                 "oldest_days": oldest_days,
@@ -2180,7 +2978,21 @@ class FinanceService:
                 "order": "created_at.desc",
                 "limit": "1",
             })
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "order": "date.desc",
+            })
+            upcoming_rows = sb.get("transactions", {
+                "select": "id",
+                "household_id": f"eq.{household_id}",
+                "is_planned": "eq.true",
+                "is_skipped": "eq.false",
+                "occurred_at": f"gt.{now.isoformat()}",
+                "direction": "in.(income,expense)",
+            })
 
+        fx_by_cur = _build_fx_lookup(fx_rows)
         user_names = {u["id"]: u["name"] for u in users}
 
         uncat_items = [
@@ -2319,9 +3131,37 @@ class FinanceService:
             + sum(1 for s in sources if s["status"] in ("amber", "red"))
         )
 
+        # ── "Сегодня" snapshot (#7). Convert balances using the latest rate per
+        # currency; None when a non-RUB balance has no rate at all.
+        def _conv_rest(amount: float, cur: str) -> float | None:
+            c = (cur or "rub").lower()
+            if c == "rub":
+                return amount
+            if c == "usdt":
+                c = "usd"
+            rates = fx_by_cur.get(c, [])
+            return amount * rates[0][1] if rates else None
+
+        consolidated_rub, fx_complete = _sum_balances_rub(bal_accounts, _conv_rest)
+        overdue = self.overdue_planned_items_via_rest(household_id)
+        overdue_rub = sum(o["amount_rub"] for o in overdue if o.get("amount_rub") is not None)
+        upcoming_planned_count = len(upcoming_rows)
+        current_mk = now.strftime("%Y-%m")
+        ml = self.month_lock_status_via_rest(household_id, current_mk)
+        today_block = {
+            "consolidated_rub": consolidated_rub,
+            "fx_complete": fx_complete,
+            "untagged_count": uncat_count,
+            "overdue_count": len(overdue),
+            "overdue_rub": round(overdue_rub, 2),
+            "upcoming_planned_count": upcoming_planned_count,
+            "month_lock": ml if ml.get("locked") else None,
+        }
+
         return {
             "generated_at": now.isoformat(),
             "attention_count": attention_count,
+            "today": today_block,
             "uncategorized": {
                 "count": uncat_count,
                 "oldest_days": oldest_days,
@@ -2339,24 +3179,24 @@ class FinanceService:
         }
 
 
-def _derive_status(tx: Transaction) -> str:
-    """Derive UI display status from transaction state.
+def _status_for(is_planned: bool, occurred: date, merchant: str | None, today: date) -> str:
+    """Single source of truth for UI display status. Used by both the SQLAlchemy
+    (`_derive_status`) and REST (`monthly_report_via_rest`) paths so they can't drift.
 
     actual    — normal recorded transaction
     planned   — future planned entry not yet overdue
-    overdue   — planned entry whose date has passed
+    overdue   — planned entry whose date has passed (still expected to happen)
     unplanned — user explicitly marked with [сюрприз] or [surprise]
     """
-    today = date.today()
-    occurred = tx.occurred_at.date() if hasattr(tx.occurred_at, "date") else tx.occurred_at
-
-    if tx.is_planned:
-        if occurred <= today:
-            return "overdue"
-        return "planned"
-
-    raw = (tx.merchant_raw or "").lower()
+    if is_planned:
+        return "overdue" if occurred <= today else "planned"
+    raw = (merchant or "").lower()
     if "[сюрприз]" in raw or "[surprise]" in raw:
         return "unplanned"
-
     return "actual"
+
+
+def _derive_status(tx: Transaction) -> str:
+    """Derive UI display status from a Transaction ORM row (SQLAlchemy path)."""
+    occurred = tx.occurred_at.date() if hasattr(tx.occurred_at, "date") else tx.occurred_at
+    return _status_for(tx.is_planned, occurred, tx.merchant_raw, date.today())
