@@ -123,6 +123,74 @@ def _rub_on_date(
     return amount  # silent 1:1; backfill fx_rates if this matters
 
 
+def _build_applied_lookup(exchange_rows: list[dict]) -> dict[str, list[tuple[str, float]]]:
+    """{CUR -> [(date_str, rub_per_unit), …] desc} of the household's real applied
+    rates, derived from RUB-paired EXCHANGE transactions. REST mirror of
+    fx_service.last_applied_rate_to_rub (per-currency, date-sorted)."""
+    by_cur: dict[str, list[tuple[str, float]]] = {}
+    for r in exchange_rows:
+        fc = (r.get("from_currency") or "").upper()
+        tc = (r.get("to_currency") or "").upper()
+        fa, ta = r.get("from_amount"), r.get("to_amount")
+        d = (r.get("occurred_at") or "")[:10]
+        cur = rate = None
+        try:
+            if fc == "RUB" and tc and ta and float(ta) != 0:
+                cur, rate = tc, float(fa) / float(ta)
+            elif tc == "RUB" and fc and fa and float(fa) != 0:
+                cur, rate = fc, float(ta) / float(fa)
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        if cur and rate is not None:
+            by_cur.setdefault(cur, []).append((d, rate))
+    for k in by_cur:
+        by_cur[k].sort(key=lambda x: x[0], reverse=True)
+    return by_cur
+
+
+def _real_rate_on_date(
+    currency: str | None,
+    occurred_date: str | None,
+    applied_by_cur: dict[str, list[tuple[str, float]]],
+    fx_by_cur: dict[str, list[tuple[str, float]]],
+    override: float | None = None,
+) -> float | None:
+    """RUB-per-unit for `currency`, REST mirror of valuation_rate_to_rub:
+    override → real applied rate on/before date → CBR (fx) on/before date → latest CBR.
+    Returns None only when nothing is available."""
+    c = (currency or "rub").upper()
+    if c == "RUB":
+        return 1.0
+    if override is not None:
+        return float(override)
+    d_iso = (occurred_date or "")[:10]
+    for d, rate in applied_by_cur.get(c, []):
+        if not d_iso or d <= d_iso:
+            return rate
+    lc = "usd" if c == "USDT" else c.lower()
+    rates = fx_by_cur.get(lc, [])
+    for d, rate in rates:
+        if not d_iso or d <= d_iso:
+            return rate
+    return rates[0][1] if rates else None
+
+
+def next_recurring_occurrence(day_of_month: int) -> date:
+    """Next calendar date with that day number (this month if still ahead, else
+    next), clamping to the month length. Shared by the web recurring surface;
+    mirrors the bot's _next_occurrence in app/bot/handlers/recurring.py."""
+    today = datetime.now(timezone.utc).date()
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    candidate = date(today.year, today.month, min(day_of_month, last_day))
+    if candidate <= today:
+        if today.month == 12:
+            candidate = date(today.year + 1, 1, min(day_of_month, 31))
+        else:
+            last_next = calendar.monthrange(today.year, today.month + 1)[1]
+            candidate = date(today.year, today.month + 1, min(day_of_month, last_next))
+    return candidate
+
+
 def _sum_balances_rub(bal_accounts: list[dict], convert) -> tuple[float, bool]:
     """Consolidate per-account latest balances into a single RUB total.
 
@@ -144,6 +212,94 @@ def _sum_balances_rub(bal_accounts: list[dict], convert) -> tuple[float, bool]:
         else:
             total += rub
     return round(total, 2), fx_complete
+
+
+# ─── Clear picture / hustle (safety-floor runway) — tune here. ────────────────
+HUSTLE_FLOOR_RUB = 100_000.0   # keep liquid above this floor
+HUSTLE_HORIZON_M = 3           # …for this many months
+HUSTLE_TRAILING_M = 3          # average burn/income over this many trailing months
+INCOME_STALE_D = 30            # no actual income for ≥ this many days → income is stale
+
+
+def _clear_picture(
+    *,
+    liquid_rub: float,
+    avg_burn_rub: float,
+    expected_income_rub: float,
+    committed_rub: float,
+    recurring_count: int,
+    income_age_days: int | None,
+    balance_status: str,
+    overdue_rub: float,
+    overdue_count: int,
+    upcoming_planned_count: int,
+    untagged_count: int,
+    floor: float = HUSTLE_FLOOR_RUB,
+    horizon: int = HUSTLE_HORIZON_M,
+) -> dict[str, Any]:
+    """The four operator questions in one block: balance, depth (runway),
+    payments-understood health, and the hustle gap (safety-floor runway).
+
+    Safety-floor runway: to keep liquid ≥ `floor` for `horizon` months you must
+    earn `needed_per_month`; the `gap` is how much that exceeds today's income.
+    `runway_months` is how long liquid lasts at the current net burn.
+
+    Pure — both data_health variants feed it their own inputs. Every number
+    carries a `confidence` flag so a guessed answer reads as a guess (the whole
+    point: don't pretend to know what the DB doesn't hold)."""
+    net_burn = avg_burn_rub + committed_rub - expected_income_rub
+    # Months until liquid drops to the floor at the current net burn.
+    runway_months = (
+        None if net_burn <= 0 else round(max(0.0, (liquid_rub - floor) / net_burn), 1)
+    )
+    needed = max(0.0, avg_burn_rub + committed_rub - (liquid_rub - floor) / horizon)
+    gap = round(max(0.0, needed - expected_income_rub), 2)
+
+    income_stale = income_age_days is None or income_age_days > INCOME_STALE_D
+    flags: list[str] = []
+    if recurring_count == 0:
+        flags.append("no_recurring")     # obligations not modelled → burn is guessed
+    if income_stale:
+        flags.append("income_stale")     # income figure may be out of date
+    if balance_status in ("amber", "red"):
+        flags.append("stale_balance")    # the balance feeding liquid is stale
+    confidence = "green" if not flags else ("red" if len(flags) >= 2 else "amber")
+
+    payments_status = _worst([
+        "red" if recurring_count == 0 else "green",
+        "amber" if overdue_count else "green",
+        _signal_uncat_status(untagged_count, None),
+    ])
+
+    return {
+        "balance_rub": round(liquid_rub, 2),
+        "balance_status": balance_status,
+        "depth": {
+            "runway_months": runway_months,
+            "overdue_rub": round(overdue_rub, 2),
+            "overdue_count": overdue_count,
+            "upcoming_planned_count": upcoming_planned_count,
+        },
+        "payments": {
+            "recurring_count": recurring_count,
+            "overdue_count": overdue_count,
+            "untagged_count": untagged_count,
+            "status": payments_status,
+        },
+        "hustle": {
+            "floor_rub": floor,
+            "horizon_months": horizon,
+            "avg_burn_rub": round(avg_burn_rub, 2),
+            "committed_rub": round(committed_rub, 2),
+            "expected_income_rub": round(expected_income_rub, 2),
+            "needed_per_month_rub": round(needed, 2),
+            "gap_rub": gap,
+            "runway_months": runway_months,
+            "income_age_days": income_age_days,
+            "confidence": confidence,
+            "flags": flags,
+        },
+    }
 
 
 class FinanceService:
@@ -847,11 +1003,17 @@ class FinanceService:
         """Per-account latest balance + RUB equivalent, plus a consolidated RUB total
         (#5). Reuses the data-health balance shape and the FX engine. `fx_complete`
         flags when a non-RUB balance lacked a rate (surfaced, not silently 1:1).
-        Mirror in list_accounts_with_balances_via_rest()."""
-        from app.application.services.fx_service import convert_to_rub
+        Holdings are valued at the household's real applied rate (valuation_rate_to_rub),
+        falling back to CBR. Mirror in list_accounts_with_balances_via_rest()."""
+        from app.application.services.fx_service import valuation_rate_to_rub
 
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
         today = datetime.now(timezone.utc).date()
+
+        def _val(amount: float, c: str) -> float | None:
+            rate, _src = valuation_rate_to_rub(str(hid), c, today, self.db)
+            return float(amount) * float(rate) if rate is not None else None
+
         user_names = {
             u.id: u.name
             for u in self.db.query(User).filter(User.household_id == hid).all()
@@ -873,10 +1035,7 @@ class FinanceService:
             )
             cur = acc.currency.value
             native = float(snap.actual_balance) if snap and snap.actual_balance is not None else None
-            rub = None
-            if native is not None:
-                conv = convert_to_rub(Decimal(str(native)), cur, today, self.db) if cur.lower() != "rub" else Decimal(str(native))
-                rub = float(conv) if conv is not None else None
+            rub = _val(native, cur) if native is not None else None
             items.append({
                 "id": str(acc.id),
                 "name": acc.name,
@@ -890,13 +1049,7 @@ class FinanceService:
             })
             bal_for_sum.append({"last_balance": native, "currency": cur})
 
-        def _conv(amount: float, c: str) -> float | None:
-            if (c or "rub").lower() == "rub":
-                return amount
-            r = convert_to_rub(Decimal(str(amount)), c, today, self.db)
-            return float(r) if r is not None else None
-
-        consolidated_rub, fx_complete = _sum_balances_rub(bal_for_sum, _conv)
+        consolidated_rub, fx_complete = _sum_balances_rub(bal_for_sum, _val)
         return {
             "base_currency": "rub",
             "accounts": items,
@@ -933,20 +1086,24 @@ class FinanceService:
                 "to_currency": "eq.RUB",
                 "order": "date.desc",
             })
+            exchange_rows = sb.get("transactions", {
+                "select": "occurred_at,from_amount,from_currency,to_amount,to_currency",
+                "household_id": f"eq.{household_id}",
+                "direction": "eq.exchange",
+                "order": "occurred_at.desc",
+            })
         fx_by_cur = _build_fx_lookup(fx_rows)
+        applied_by_cur = _build_applied_lookup(exchange_rows)
+        today_iso = date.today().isoformat()
         user_names = {u["id"]: u["name"] for u in users}
         latest_snap: dict[str, dict] = {}
         for r in snap_rows:
             latest_snap.setdefault(r["account_id"], r)
 
         def _conv(amount: float, c: str) -> float | None:
-            cc = (c or "rub").lower()
-            if cc == "rub":
-                return amount
-            if cc == "usdt":
-                cc = "usd"
-            rates = fx_by_cur.get(cc, [])
-            return amount * rates[0][1] if rates else None
+            # Value holdings at the real applied rate (today), CBR fallback.
+            rate = _real_rate_on_date(c, today_iso, applied_by_cur, fx_by_cur)
+            return amount * rate if rate is not None else None
 
         items: list[dict[str, Any]] = []
         bal_for_sum: list[dict[str, Any]] = []
@@ -979,6 +1136,111 @@ class FinanceService:
             "fx_complete": fx_complete,
             "users": [{"id": uid, "name": name} for uid, name in user_names.items()],
         }
+
+    # ─── Recurring payments (web surface; mirrors bot /recurring) ──────────────
+
+    def list_recurring(self, household_id: str) -> dict[str, Any]:
+        """Active recurring payments for the household. Mirror in list_recurring_via_rest()."""
+        from app.infrastructure.db.models import RecurringPayment
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        rows = (
+            self.db.query(RecurringPayment)
+            .filter(RecurringPayment.household_id == hid, RecurringPayment.is_active == True)  # noqa: E712
+            .order_by(RecurringPayment.next_due_date.asc())
+            .all()
+        )
+        items = [{
+            "id": str(r.id),
+            "title": r.title,
+            "amount_expected": float(r.amount_expected) if r.amount_expected is not None else None,
+            "currency": r.currency.value if hasattr(r.currency, "value") else r.currency,
+            "day_of_month": r.day_of_month,
+            "next_due_date": r.next_due_date.isoformat() if r.next_due_date else None,
+        } for r in rows]
+        return {"items": items, "count": len(items)}
+
+    def create_recurring(self, household_id: str, *, title: str, amount, currency: str,
+                         day_of_month: int) -> str:
+        """Create a monthly recurring payment. SQLAlchemy counterpart of create_recurring_via_rest()."""
+        from app.infrastructure.db.models import RecurringPayment
+
+        hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
+        cur = currency if isinstance(currency, Currency) else Currency(currency)
+        rec = RecurringPayment(
+            id=_uuid.uuid4(), household_id=hid, title=title.strip(),
+            amount_expected=Decimal(str(amount)), currency=cur, cadence="monthly",
+            day_of_month=int(day_of_month), next_due_date=next_recurring_occurrence(int(day_of_month)),
+            is_active=True,
+        )
+        self.db.add(rec)
+        self.db.commit()
+        return str(rec.id)
+
+    def deactivate_recurring(self, rec_id: str) -> bool:
+        """Soft-delete a recurring payment (is_active=False)."""
+        from app.infrastructure.db.models import RecurringPayment
+
+        try:
+            rid = _uuid.UUID(rec_id) if isinstance(rec_id, str) else rec_id
+        except ValueError:
+            return False
+        rec = self.db.get(RecurringPayment, rid)
+        if rec is None:
+            return False
+        rec.is_active = False
+        self.db.commit()
+        return True
+
+    def list_recurring_via_rest(self, household_id: str) -> dict[str, Any]:
+        """REST variant of list_recurring(). Keep in sync."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rows = sb.get("recurring_payments", {
+                "select": "id,title,amount_expected,currency,day_of_month,next_due_date",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+                "order": "next_due_date.asc",
+            })
+        items = [{
+            "id": r["id"],
+            "title": r.get("title"),
+            "amount_expected": float(r["amount_expected"]) if r.get("amount_expected") is not None else None,
+            "currency": r.get("currency"),
+            "day_of_month": r.get("day_of_month"),
+            "next_due_date": (r.get("next_due_date") or "")[:10] or None,
+        } for r in rows]
+        return {"items": items, "count": len(items)}
+
+    def create_recurring_via_rest(self, household_id: str, *, title: str, amount, currency: str,
+                                  day_of_month: int) -> str:
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        rid = str(_uuid.uuid4())
+        body = {
+            "id": rid, "household_id": household_id, "title": title.strip(),
+            "amount_expected": float(amount), "currency": Currency(currency).value,
+            "cadence": "monthly", "day_of_month": int(day_of_month),
+            "next_due_date": next_recurring_occurrence(int(day_of_month)).isoformat(),
+            "is_active": True,
+        }
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            sb.post("recurring_payments", [body])
+        return rid
+
+    def deactivate_recurring_via_rest(self, rec_id: str) -> bool:
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            sb.patch("recurring_payments", {"id": f"eq.{rec_id}"}, {"is_active": False})
+        return True
 
     # ─── Approve & lock month (#6) ────────────────────────────────────────────
 
@@ -1321,9 +1583,9 @@ class FinanceService:
 
     def update_transaction(self, tx_id: str, **fields) -> Transaction | None:
         """Update editable fields of a transaction. Recognized keys: amount,
-        currency, direction, occurred_at, primary_tag, account_id, merchant.
-        Returns the row, or None if not found. Unknown keys are ignored;
-        omitted keys are left unchanged."""
+        currency, direction, occurred_at, primary_tag, account_id, merchant,
+        applied_rate_override. Returns the row, or None if not found. Unknown
+        keys are ignored; omitted keys are left unchanged."""
         try:
             tid = _uuid.UUID(tx_id) if isinstance(tx_id, str) else tx_id
         except ValueError:
@@ -1350,6 +1612,9 @@ class FinanceService:
             tx.account_id = _uuid.UUID(aid) if isinstance(aid, str) else aid
         if "merchant" in fields and fields["merchant"] is not None:
             tx.merchant_raw = fields["merchant"]
+        if "applied_rate_override" in fields:  # explicit None clears it
+            v = fields["applied_rate_override"]
+            tx.applied_rate_override = Decimal(str(v)) if v is not None else None
         self.db.commit()
         return tx
 
@@ -1847,6 +2112,7 @@ class FinanceService:
                     "account_id": str(tx.account_id) if tx.account_id else None,
                     "is_planned": tx.is_planned,
                     "is_internal_transfer": tx.is_internal_transfer,
+                    "applied_rate_override": float(tx.applied_rate_override) if tx.applied_rate_override is not None else None,
                     "status": _derive_status(tx),
                 }
                 for tx in txs
@@ -1876,7 +2142,7 @@ class FinanceService:
             })
 
             txs = sb.get("transactions", {
-                "select": "id,occurred_at,direction,amount,currency,merchant_raw,primary_tag,account_id,is_planned,is_internal_transfer,is_skipped",
+                "select": "id,occurred_at,direction,amount,currency,merchant_raw,primary_tag,account_id,is_planned,is_internal_transfer,is_skipped,applied_rate_override",
                 "household_id": f"eq.{household_id}",
                 "occurred_at": [f"gte.{start_iso}", f"lte.{end_iso}"],
                 "is_internal_transfer": "eq.false",
@@ -1965,6 +2231,7 @@ class FinanceService:
                 "account_id": tx.get("account_id"),
                 "is_planned": tx["is_planned"],
                 "is_internal_transfer": tx["is_internal_transfer"],
+                "applied_rate_override": tx.get("applied_rate_override"),
                 "status": status,
             })
 
@@ -2701,6 +2968,77 @@ class FinanceService:
 
     # ─── Data-health home page ─────────────────────────────────────────────
 
+    def _hustle_inputs(self, hid, today_d: date) -> tuple[float, float, int | None, float, int]:
+        """Trailing-`HUSTLE_TRAILING_M`-month avg actual burn & income (RUB, ЗАКОН),
+        days since last actual income, monthly committed recurring (RUB), and the
+        active recurring count. Feeds _clear_picture(). Mirror in the REST path.
+
+        Amounts are valued at the household's real rate: a per-txn override, else
+        the applied exchange rate near the txn date, else CBR (valuation_rate_to_rub)."""
+        from app.application.services.fx_service import valuation_rate_to_rub
+        from app.infrastructure.db.models import RecurringPayment
+
+        hid_s = str(hid)
+
+        def _val(amount, cur, for_date, override=None):
+            rate, _src = valuation_rate_to_rub(hid_s, cur, for_date, self.db, override=override)
+            return Decimal(str(amount)) * rate if rate is not None else None
+
+        start = today_d - timedelta(days=30 * HUSTLE_TRAILING_M)
+        start_dt = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.household_id == hid,
+                Transaction.is_planned == False,  # noqa: E712 — ЗАКОН
+                Transaction.is_internal_transfer == False,  # noqa: E712 — ЗАКОН
+                Transaction.direction.in_([TransactionDirection.INCOME, TransactionDirection.EXPENSE]),
+                Transaction.occurred_at >= start_dt,
+            )
+            .all()
+        )
+        burn = Decimal("0")
+        income = Decimal("0")
+        last_income_dt: datetime | None = None
+        for t in rows:
+            cur = t.currency.value if hasattr(t.currency, "value") else t.currency
+            tx_date = t.occurred_at.date() if t.occurred_at else today_d
+            rub = _val(t.amount, cur, tx_date, override=t.applied_rate_override)
+            if rub is None:
+                continue
+            if t.direction == TransactionDirection.EXPENSE:
+                burn += rub
+            else:
+                income += rub
+                if t.occurred_at and (last_income_dt is None or t.occurred_at > last_income_dt):
+                    last_income_dt = t.occurred_at
+        income_age = None
+        if last_income_dt is not None:
+            if last_income_dt.tzinfo is None:
+                last_income_dt = last_income_dt.replace(tzinfo=timezone.utc)
+            income_age = (datetime.now(timezone.utc) - last_income_dt).days
+
+        rec = (
+            self.db.query(RecurringPayment)
+            .filter(RecurringPayment.household_id == hid, RecurringPayment.is_active == True)  # noqa: E712
+            .all()
+        )
+        committed = Decimal("0")
+        for r in rec:
+            if r.amount_expected is None:
+                continue
+            cur = r.currency.value if hasattr(r.currency, "value") else r.currency
+            rub = _val(r.amount_expected, cur, today_d)
+            if rub is not None:
+                committed += rub
+        return (
+            float(burn) / HUSTLE_TRAILING_M,
+            float(income) / HUSTLE_TRAILING_M,
+            income_age,
+            float(committed),
+            len(rec),
+        )
+
     def data_health(self, household_id: str, current_user_id: str | None = None) -> dict[str, Any]:
         """How complete and fresh the household's finance data is, plus a
         per-person to-do split keyed on `users` (transactions carry `user_id`;
@@ -2853,14 +3191,13 @@ class FinanceService:
         )
 
         # ── "Сегодня" snapshot — the clear-picture-today block (#7).
-        from app.application.services.fx_service import convert_to_rub
+        # Holdings valued at the real applied rate (valuation_rate_to_rub), CBR fallback.
+        from app.application.services.fx_service import valuation_rate_to_rub
         today_d = now.date()
 
         def _conv(amount: float, cur: str) -> float | None:
-            if (cur or "rub").lower() == "rub":
-                return amount
-            r = convert_to_rub(Decimal(str(amount)), cur, today_d, self.db)
-            return float(r) if r is not None else None
+            rate, _src = valuation_rate_to_rub(str(hid), cur, today_d, self.db)
+            return float(amount) * float(rate) if rate is not None else None
 
         consolidated_rub, fx_complete = _sum_balances_rub(bal_accounts, _conv)
         overdue = self.overdue_planned_items(str(hid))
@@ -2888,9 +3225,26 @@ class FinanceService:
             "month_lock": ml if ml.get("locked") else None,
         }
 
+        # ── "Чёткая картина" — the four operator questions in one block.
+        avg_burn, avg_income, income_age, committed_rub, rec_count = self._hustle_inputs(hid, today_d)
+        clear_picture = _clear_picture(
+            liquid_rub=consolidated_rub if consolidated_rub is not None else 0.0,
+            avg_burn_rub=avg_burn,
+            expected_income_rub=avg_income,
+            committed_rub=committed_rub,
+            recurring_count=rec_count,
+            income_age_days=income_age,
+            balance_status=bal_status,
+            overdue_rub=overdue_rub,
+            overdue_count=len(overdue),
+            upcoming_planned_count=upcoming_planned_count,
+            untagged_count=uncat_count,
+        )
+
         return {
             "generated_at": now.isoformat(),
             "attention_count": attention_count,
+            "clear_picture": clear_picture,
             "today": today_block,
             "uncategorized": {
                 "count": uncat_count,
@@ -2959,13 +3313,26 @@ class FinanceService:
                     "order": "account_id.asc,created_at.desc",
                 })
             # Real, account-attributed txns for drift derivation (ЗАКОН filters).
+            # `currency` is also reused for the trailing burn/income hustle inputs.
             attributed_rows = sb.get("transactions", {
-                "select": "account_id,occurred_at,amount,direction,is_planned,is_internal_transfer,is_skipped",
+                "select": "account_id,occurred_at,amount,currency,direction,is_planned,is_internal_transfer,is_skipped,applied_rate_override",
                 "household_id": f"eq.{household_id}",
                 "is_planned": "eq.false",
                 "is_internal_transfer": "eq.false",
                 "is_skipped": "eq.false",
                 "direction": "in.(income,expense)",
+            })
+            recurring_rows = sb.get("recurring_payments", {
+                "select": "amount_expected,currency,is_active",
+                "household_id": f"eq.{household_id}",
+                "is_active": "eq.true",
+            })
+            # Real applied rates (RUB-paired EXCHANGE txns) for valuation.
+            exchange_rows = sb.get("transactions", {
+                "select": "occurred_at,from_amount,from_currency,to_amount,to_currency",
+                "household_id": f"eq.{household_id}",
+                "direction": "eq.exchange",
+                "order": "occurred_at.desc",
             })
             raw_rows = sb.get("raw_import_transactions", {
                 "select": "source_name,imported_at",
@@ -2993,6 +3360,7 @@ class FinanceService:
             })
 
         fx_by_cur = _build_fx_lookup(fx_rows)
+        applied_by_cur = _build_applied_lookup(exchange_rows)
         user_names = {u["id"]: u["name"] for u in users}
 
         uncat_items = [
@@ -3131,16 +3499,13 @@ class FinanceService:
             + sum(1 for s in sources if s["status"] in ("amber", "red"))
         )
 
-        # ── "Сегодня" snapshot (#7). Convert balances using the latest rate per
-        # currency; None when a non-RUB balance has no rate at all.
+        # ── "Сегодня" snapshot (#7). Value balances at the real applied rate
+        # (today), CBR fallback; None when no rate at all.
+        today_iso = now.date().isoformat()
+
         def _conv_rest(amount: float, cur: str) -> float | None:
-            c = (cur or "rub").lower()
-            if c == "rub":
-                return amount
-            if c == "usdt":
-                c = "usd"
-            rates = fx_by_cur.get(c, [])
-            return amount * rates[0][1] if rates else None
+            rate = _real_rate_on_date(cur, today_iso, applied_by_cur, fx_by_cur)
+            return amount * rate if rate is not None else None
 
         consolidated_rub, fx_complete = _sum_balances_rub(bal_accounts, _conv_rest)
         overdue = self.overdue_planned_items_via_rest(household_id)
@@ -3158,9 +3523,56 @@ class FinanceService:
             "month_lock": ml if ml.get("locked") else None,
         }
 
+        # ── "Чёткая картина" — trailing burn/income + recurring (mirror _hustle_inputs).
+        cutoff = now - timedelta(days=30 * HUSTLE_TRAILING_M)
+        burn = 0.0
+        income = 0.0
+        last_income_dt = None
+        for t in attributed_rows:
+            occ = _parse_iso(t.get("occurred_at"))
+            if occ is None or occ < cutoff:
+                continue
+            ov = t.get("applied_rate_override")
+            rate = _real_rate_on_date(
+                t.get("currency") or "rub", occ.date().isoformat(),
+                applied_by_cur, fx_by_cur,
+                override=float(ov) if ov is not None else None,
+            )
+            if rate is None:
+                continue
+            rub = float(t.get("amount") or 0) * rate
+            if (t.get("direction") or "").lower() == "expense":
+                burn += rub
+            else:
+                income += rub
+                if last_income_dt is None or occ > last_income_dt:
+                    last_income_dt = occ
+        income_age = (now - last_income_dt).days if last_income_dt else None
+        committed_rub = 0.0
+        for r in recurring_rows:
+            if r.get("amount_expected") is None:
+                continue
+            rub = _conv_rest(float(r["amount_expected"]), r.get("currency") or "rub")
+            if rub is not None:
+                committed_rub += rub
+        clear_picture = _clear_picture(
+            liquid_rub=consolidated_rub if consolidated_rub is not None else 0.0,
+            avg_burn_rub=burn / HUSTLE_TRAILING_M,
+            expected_income_rub=income / HUSTLE_TRAILING_M,
+            committed_rub=committed_rub,
+            recurring_count=len(recurring_rows),
+            income_age_days=income_age,
+            balance_status=bal_status,
+            overdue_rub=overdue_rub,
+            overdue_count=len(overdue),
+            upcoming_planned_count=upcoming_planned_count,
+            untagged_count=uncat_count,
+        )
+
         return {
             "generated_at": now.isoformat(),
             "attention_count": attention_count,
+            "clear_picture": clear_picture,
             "today": today_block,
             "uncategorized": {
                 "count": uncat_count,

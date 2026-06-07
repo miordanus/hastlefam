@@ -122,12 +122,15 @@ def last_applied_rate_to_rub(
     household_id,
     currency: str,
     db: Session,
+    for_date: date | None = None,
 ) -> Decimal | None:
-    """The most recent *actual* RUB-per-unit rate the household applied for
-    `currency`, derived from a RUB-paired EXCHANGE transaction.
+    """The *actual* RUB-per-unit rate the household applied for `currency`,
+    derived from a RUB-paired EXCHANGE transaction.
 
-    Returns None when no exchange has paired `currency` with RUB (so the caller
-    can fall back to the CBR rate). RUB itself is always 1.
+    With `for_date`, returns the most recent exchange **on or before** that date
+    (so a historical transaction is valued at the rate that applied around then,
+    not today's). Without it, returns the globally most recent. None when no
+    exchange has paired `currency` with RUB (caller falls back to CBR). RUB = 1.
     """
     import uuid as _uuid
 
@@ -149,6 +152,8 @@ def last_applied_rate_to_rub(
         .all()
     )
     for tx in rows:
+        if for_date is not None and tx.occurred_at and tx.occurred_at.date() > for_date:
+            continue  # only exchanges on/before the valuation date
         fc = (tx.from_currency or "").upper()
         tc = (tx.to_currency or "").upper()
         if fc == "RUB" and tc == cur and tx.to_amount:
@@ -163,18 +168,20 @@ def valuation_rate_to_rub(
     currency: str,
     for_date: date,
     db: Session,
+    override: Decimal | None = None,
 ) -> tuple[Decimal | None, str]:
-    """RUB-per-unit rate used to *value a holding* in `currency`, preferring the
-    real applied exchange rate over the CBR rate.
+    """RUB-per-unit rate used to value `currency`, preferring (in order) an
+    explicit per-transaction `override`, then the real applied exchange rate on
+    or before `for_date`, then the CBR rate.
 
-    Returns (rate, source) where source ∈ {"actual", "cbr", "rub", "none"}.
-    Scope is holdings/balance valuation — per-expense conversion keeps using the
-    date-based CBR path (`convert_to_rub` / `_rub_on_date`).
+    Returns (rate, source) where source ∈ {"override", "actual", "cbr", "rub", "none"}.
     """
     cur = (currency or "").upper()
     if cur == "RUB":
         return Decimal("1"), "rub"
-    actual = last_applied_rate_to_rub(household_id, currency, db)
+    if override is not None:
+        return Decimal(str(override)), "override"
+    actual = last_applied_rate_to_rub(household_id, currency, db, for_date=for_date)
     if actual is not None:
         return actual, "actual"
     cbr = convert_to_rub(Decimal("1"), currency, for_date, db)

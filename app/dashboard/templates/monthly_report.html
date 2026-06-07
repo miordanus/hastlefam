@@ -371,6 +371,7 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
       <a class="h-tab h-tab-link" id="nav-planned"  href="/finance/planned">Планы</a>
       <a class="h-tab h-tab-link" id="nav-quality"  href="/finance/quality">Качество</a>
       <a class="h-tab h-tab-link" id="nav-accounts" href="/finance/accounts">Счета</a>
+      <a class="h-tab h-tab-link" id="nav-recurring" href="/finance/recurring">Регулярные</a>
       <a class="h-tab h-tab-link" id="nav-health"   href="/finance/health">Здоровье</a>
     </nav>
     <div class="h-right">
@@ -725,7 +726,7 @@ if (_INJECTED && _INJECTED.accounts) {
 (() => {
   const hh = HOUSEHOLD_ID || new URLSearchParams(location.search).get('household_id');
   if (!hh) return;
-  ['nav-planned','nav-quality','nav-accounts','nav-health'].forEach(id => {
+  ['nav-planned','nav-quality','nav-accounts','nav-recurring','nav-health'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.href += (el.href.includes('?') ? '&' : '?') + 'household_id=' + encodeURIComponent(hh);
   });
@@ -1737,6 +1738,10 @@ function renderEditForm(id) {
         <label class="form-label">Тег</label>
         <input class="form-input" id="ed-tag" type="text" list="tag-suggest" value="${esc(tx.primary_tag || '')}">
       </div>
+      ${curUp !== 'RUB' ? `<div class="form-field">
+        <label class="form-label">Реальный курс (₽ за 1 ${curUp})</label>
+        <input class="form-input mono" id="ed-rate" type="number" step="0.000001" value="${tx.applied_rate_override != null ? tx.applied_rate_override : ''}" placeholder="как при обмене; пусто = по ЦБ/реальному">
+      </div>` : ''}
       <div class="modal-actions">
         <button class="btn-ghost" onclick="openPanel('${tx.id}')">Отмена</button>
         <button class="btn-primary" id="ed-save" onclick="saveTxEdit('${tx.id}')">Сохранить</button>
@@ -1761,6 +1766,13 @@ async function saveTxEdit(id) {
   if (tag !== (tx.primary_tag || '')) body.primary_tag = tag;
   const acc = document.getElementById('ed-account').value;
   if (acc && acc !== tx.account_id) body.account_id = acc;
+  const rateEl = document.getElementById('ed-rate');
+  if (rateEl) {
+    const raw = rateEl.value.trim().replace(',', '.');
+    const cur = tx.applied_rate_override;
+    if (raw === '' && cur != null) body.applied_rate_override = null;          // clear
+    else if (raw !== '' && Number(raw) !== Number(cur)) body.applied_rate_override = Number(raw);
+  }
 
   if (Object.keys(body).length === 0) { closePanel(); return; }
   const btn = document.getElementById('ed-save');

@@ -38,6 +38,7 @@ a { color:inherit; text-decoration:none; }
 .hero-num.ok { color:var(--green); }
 
 .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.cards-4 { grid-template-columns:repeat(4,1fr); }
 .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
 .card-head { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
 .card-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
@@ -73,7 +74,7 @@ tr:last-child td { border-bottom:none; }
 .todo-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .person-done { padding:14px 16px; font-size:13px; color:var(--green); }
 
-@media (max-width:760px){ .cards,.people { grid-template-columns:1fr; } }
+@media (max-width:760px){ .cards,.cards-4,.people { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -85,6 +86,7 @@ tr:last-child td { border-bottom:none; }
     <a class="h-link" href="/finance/planned?household_id={{ household_id or '' }}">Планы</a>
     <a class="h-link" href="/finance/quality?household_id={{ household_id or '' }}">Качество</a>
     <a class="h-link" href="/finance/accounts?household_id={{ household_id or '' }}">Счета</a>
+    <a class="h-link" href="/finance/recurring?household_id={{ household_id or '' }}">Регулярные</a>
     <a class="h-link" href="/auth/logout">Выйти</a>
   </div>
 </div></div>
@@ -252,7 +254,40 @@ function render(){
       ${lockTile}
     </div>`;
 
-  root.innerHTML = todayHtml
+  // ── "Чёткая картина" — четыре вопроса оператора в одном месте.
+  // Баланс · Запас (runway) · Платежи · Сколько хастлить (зазор дохода).
+  const CP = D.clear_picture;
+  let cpHtml = '';
+  if(CP){
+    const h = CP.hustle || {}, dp = CP.depth || {}, pm = CP.payments || {};
+    const cashflowUrl = `/finance/cashflow?household_id=${encodeURIComponent(HID)}`;
+    const runway = dp.runway_months;
+    const runwayTxt = runway==null ? 'хватает' : `${runway} мес.`;
+    const flagLabel = f => ({no_recurring:'нет регулярных платежей', income_stale:'доход устарел', stale_balance:'баланс не сверён'}[f] || f);
+    const gap = Number(h.gap_rub||0);
+    const gapColor = gap>0 ? 'red' : 'green';
+    const gapNum = gap>0 ? '+'+gap.toLocaleString('ru-RU') : '✓';
+    const gapSub = gap>0 ? `нужно +${fmtAmt(gap,'rub')}/мес` : 'доход покрывает траты';
+    const detail = (h.expected_income_rub!=null)
+      ? `сейчас ≈ ${fmtAmt(h.expected_income_rub,'rub')}/мес дохода · ${fmtAmt(h.avg_burn_rub,'rub')}/мес трат`
+      : '';
+    const conf = (h.confidence && h.confidence!=='green')
+      ? ` <span class="txt-${h.confidence}">⚠ под вопросом: ${(h.flags||[]).map(flagLabel).join(', ')}</span>` : '';
+    cpHtml = `<div class="hero-label">Чёткая картина</div>
+      <div class="cards cards-4">
+        <div class="card"><div class="card-head">${statusDot(CP.balance_status||'green')}<span class="card-label">Баланс</span></div>
+          <div class="card-num mono">${fmtAmt(CP.balance_rub||0,'rub')}</div><div class="card-sub">чистыми на счетах</div></div>
+        <a class="card" href="${cashflowUrl}" style="text-decoration:none"><div class="card-head">${statusDot(h.confidence||'green')}<span class="card-label">Запас</span></div>
+          <div class="card-num">${runwayTxt}</div><div class="card-sub">до порога ${fmtAmt(h.floor_rub||0,'rub')}</div></a>
+        <a class="card" href="${plannedUrl}" style="text-decoration:none"><div class="card-head">${statusDot(pm.status||'green')}<span class="card-label">Платежи</span></div>
+          <div class="card-num">${pm.recurring_count||0}</div><div class="card-sub">регулярных · ${pm.overdue_count||0} просроч.</div></a>
+        <div class="card"><div class="card-head">${statusDot(gapColor)}<span class="card-label">Хастл</span></div>
+          <div class="card-num txt-${gapColor}">${gapNum}</div><div class="card-sub">${gapSub}</div></div>
+      </div>
+      <div class="card-sub" style="padding:2px 2px 0">${detail}${conf}</div>`;
+  }
+
+  root.innerHTML = cpHtml + todayHtml
     + `<div class="hero-label" style="margin-top:6px">Состояние данных</div><div class="hero">${hero}</div>`
     + cards + accPanel + srcPanel + uPanel
     + `<div class="hero-label" style="margin-top:6px">Кому что разобрать</div>` + peopleHtml;
