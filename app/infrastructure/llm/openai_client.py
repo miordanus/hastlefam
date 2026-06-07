@@ -5,7 +5,12 @@ from app.infrastructure.config.settings import get_settings
 class OpenAIProvider:
     def __init__(self):
         settings = get_settings()
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        # base_url is None unless OPENAI_BASE_URL points at a custom
+        # OpenAI-compatible provider (shared by finance + foodops).
+        self.client = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+        )
         self.model = settings.openai_model
 
     async def generate_json(self, *, system_prompt: str, user_prompt: str, schema: dict) -> dict:

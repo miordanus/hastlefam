@@ -55,3 +55,21 @@ class WeeklyDigestInput(BaseModel):
 class WeeklyDigestOutput(BaseModel):
     digest_text: str
     follow_up_recommendations: list[str]
+
+
+# ─── FoodOps: multi-action grocery parse (spec §10) ──────────────────────────
+
+class FoodActionItem(BaseModel):
+    intent: str = Field(description='update_inventory|discard|add_to_shopping_list|mark_check_needed')
+    product: str
+    status: str | None = Field(default=None, description='in_stock|low|almost_out|out|check|spoil_risk')
+    quantity: float | None = None
+    unit: str | None = None
+    location: str | None = Field(default=None, description='fridge|freezer|shelf|unknown')
+    reason: str | None = Field(default=None, description='shopping-list reason, e.g. manual_request')
+    category: str | None = None
+    confidence: str = Field(default='medium', description='low|medium|high')
+
+
+class FoodParseOutput(BaseModel):
+    actions: list[FoodActionItem]

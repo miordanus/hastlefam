@@ -7,6 +7,7 @@ CONTRACTS = {
     'meeting_summary': contracts.MeetingSummaryOutput,
     'finance_insight': contracts.FinanceInsightOutput,
     'weekly_digest': contracts.WeeklyDigestOutput,
+    'food_parse': contracts.FoodParseOutput,
 }
 
 
