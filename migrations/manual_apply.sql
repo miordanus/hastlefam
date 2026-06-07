@@ -759,3 +759,15 @@ CREATE TABLE IF NOT EXISTS hastlefam.month_lock (
 );
 
 COMMIT;
+
+-- =============================================================================
+-- Migration 0023: applied_rate_override on transactions
+-- Operator-set real RUB-per-unit rate for a specific transaction; overrides the
+-- real applied exchange rate and CBR when valuing the txn to RUB. NULL = fall back.
+-- =============================================================================
+BEGIN;
+
+ALTER TABLE hastlefam.transactions
+  ADD COLUMN IF NOT EXISTS applied_rate_override NUMERIC(18, 6);
+
+COMMIT;
