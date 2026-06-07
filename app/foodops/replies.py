@@ -6,7 +6,7 @@ example responses (§24 confirmation, §25 "что купить?").
 """
 from __future__ import annotations
 
-from app.domain.enums import InventoryStatus, ShoppingPriority, ShoppingReason
+from app.domain.enums import FoodCategory, InventoryStatus, ShoppingPriority, ShoppingReason
 from app.foodops.services import spoilage_service
 from app.foodops.services.inventory_service import ApplyResult, UpdatedItem
 from app.infrastructure.db.models import FoodProduct, ShoppingListItem
@@ -37,6 +37,28 @@ _REASON_RU = {
 }
 
 _UNIT_RU = {"pcs": "шт", "шт": "шт"}
+
+_CATEGORY_RU = {
+    FoodCategory.READY_FOOD.value: "готовая еда",
+    FoodCategory.DAIRY.value: "молочка",
+    FoodCategory.PROTEIN.value: "белок",
+    FoodCategory.MEAT.value: "мясо",
+    FoodCategory.FISH.value: "рыба",
+    FoodCategory.EGGS.value: "яйца",
+    FoodCategory.VEGETABLES.value: "овощи",
+    FoodCategory.FRUITS.value: "фрукты",
+    FoodCategory.BREAD.value: "хлеб",
+    FoodCategory.GRAINS.value: "крупы",
+    FoodCategory.PASTA.value: "паста",
+    FoodCategory.CANNED.value: "консервы",
+    FoodCategory.SAUCES.value: "соусы",
+    FoodCategory.SPICES.value: "специи",
+    FoodCategory.COFFEE_TEA.value: "кофе/чай",
+    FoodCategory.FROZEN.value: "заморозка",
+    FoodCategory.SNACKS.value: "снеки",
+    FoodCategory.HOUSEHOLD.value: "бытовое",
+    FoodCategory.UNKNOWN.value: "прочее",
+}
 
 
 def _fmt_qty(item: UpdatedItem) -> str:
@@ -117,4 +139,26 @@ def format_spoilage(rows) -> str:
     if warn:
         lines.append("\nСкоро надо съесть:")
         lines += [f"- {r.name}" for r in warn]
+    return "\n".join(lines)
+
+
+def format_waste(summary) -> str:
+    if summary.total == 0:
+        return f"За {summary.window_days} дней ничего не выкидывали 👍"
+
+    lines = [f"Отходы за {summary.window_days} дней: {summary.total} выкинуто."]
+
+    if summary.by_category:
+        lines.append("\nПо категориям:")
+        lines += [f"- {_CATEGORY_RU.get(cat, cat)} — {n}" for cat, n in summary.by_category]
+
+    if summary.by_product:
+        lines.append("\nЧаще всего:")
+        lines += [f"- {name} ({n})" for name, n in summary.by_product[:5]]
+
+    if summary.repeated:
+        lines.append("\nПовторяется (стоит покупать реже или меньше):")
+        lines += [f"- {name} — {n} раза" for name, n in summary.repeated]
+
+    lines.append("\nСтоимость пока не считаем (нет цен), но повтор фиксируем.")
     return "\n".join(lines)

@@ -12,7 +12,7 @@ import uuid
 from app.domain.enums import ParsingStatus, RawInputType
 from app.foodops import queries, replies, revision
 from app.foodops.parsers import food_parser
-from app.foodops.services import inventory_service, shopping_service, spoilage_service
+from app.foodops.services import inventory_service, report_service, shopping_service, spoilage_service
 from app.infrastructure.db.models import RawInput
 
 
@@ -69,6 +69,11 @@ async def handle_message(
     if queries.is_spoilage(text):
         raw.parsing_status = ParsingStatus.PARSED.value
         return replies.format_spoilage(spoilage_service.at_risk(db, household_id))
+
+    # Read-only "что выкинули? / что проёбывается?" — waste report, no LLM.
+    if queries.is_waste(text):
+        raw.parsing_status = ParsingStatus.PARSED.value
+        return replies.format_waste(report_service.waste_summary(db, household_id))
 
     result = await food_parser.parse(text, service=parse_service)
     if not result.ok:

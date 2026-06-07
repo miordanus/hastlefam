@@ -27,6 +27,18 @@ _SPOILAGE_PATTERNS = [
 ]
 _SPOILAGE_RE = re.compile("|".join(_SPOILAGE_PATTERNS), re.IGNORECASE)
 
+_WASTE_PATTERNS = [
+    r"что\s+выкин",
+    r"сколько\s+выкин",
+    r"что\s+проёбыва",
+    r"что\s+проебыва",
+    r"что\s+пропадает\s+зря",
+    r"отчёт\s+по\s+отход",
+    r"отчет\s+по\s+отход",
+    r"что\s+чаще\s+всего\s+выкид",
+]
+_WASTE_RE = re.compile("|".join(_WASTE_PATTERNS), re.IGNORECASE)
+
 
 def is_what_to_buy(text: str) -> bool:
     return bool(_BUY_RE.search(text or ""))
@@ -34,3 +46,7 @@ def is_what_to_buy(text: str) -> bool:
 
 def is_spoilage(text: str) -> bool:
     return bool(_SPOILAGE_RE.search(text or ""))
+
+
+def is_waste(text: str) -> bool:
+    return bool(_WASTE_RE.search(text or ""))
