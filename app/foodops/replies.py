@@ -110,8 +110,10 @@ def format_to_buy(db, items: list[ShoppingListItem]) -> str:
     if not items:
         return EMPTY_LIST
 
-    urgent = [i for i in items if i.priority == ShoppingPriority.HIGH.value]
-    rest = [i for i in items if i.priority != ShoppingPriority.HIGH.value]
+    baseline = [i for i in items if i.reason == ShoppingReason.MIN_STOCK.value]
+    others = [i for i in items if i.reason != ShoppingReason.MIN_STOCK.value]
+    urgent = [i for i in others if i.priority == ShoppingPriority.HIGH.value]
+    rest = [i for i in others if i.priority != ShoppingPriority.HIGH.value]
 
     lines = ["Сейчас купить:"]
     if urgent:
@@ -120,6 +122,10 @@ def format_to_buy(db, items: list[ShoppingListItem]) -> str:
             hint = _REASON_RU.get(i.reason or "")
             name = _shop_name(db, i)
             lines.append(f"- {name} — {hint}" if hint else f"- {name}")
+    if baseline:
+        lines.append("\nБаза (держим всегда дома):")
+        for i in baseline:
+            lines.append(f"- {_shop_name(db, i)}")
     if rest:
         lines.append("\nЕщё:")
         for i in rest:
