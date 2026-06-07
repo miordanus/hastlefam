@@ -18,6 +18,19 @@ _BUY_PATTERNS = [
 ]
 _BUY_RE = re.compile("|".join(_BUY_PATTERNS), re.IGNORECASE)
 
+_SPOILAGE_PATTERNS = [
+    r"что\s+скоро\s+испорт",
+    r"что\s+(?:может\s+)?испорт",
+    r"что\s+портит",
+    r"риск\s+порчи",
+    r"что\s+пропадает",
+]
+_SPOILAGE_RE = re.compile("|".join(_SPOILAGE_PATTERNS), re.IGNORECASE)
+
 
 def is_what_to_buy(text: str) -> bool:
     return bool(_BUY_RE.search(text or ""))
+
+
+def is_spoilage(text: str) -> bool:
+    return bool(_SPOILAGE_RE.search(text or ""))

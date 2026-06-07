@@ -10,9 +10,9 @@ from __future__ import annotations
 import uuid
 
 from app.domain.enums import ParsingStatus, RawInputType
-from app.foodops import queries, replies
+from app.foodops import queries, replies, revision
 from app.foodops.parsers import food_parser
-from app.foodops.services import inventory_service, shopping_service
+from app.foodops.services import inventory_service, shopping_service, spoilage_service
 from app.infrastructure.db.models import RawInput
 
 
@@ -53,11 +53,22 @@ async def handle_message(
     db.add(raw)
     db.flush()
 
+    # Guided revision trigger — reply with the category checklist (no LLM).
+    area = revision.detect_area(text)
+    if area is not None:
+        raw.parsing_status = ParsingStatus.PARSED.value
+        return revision.revision_prompt(area)
+
     # Read-only "что купить?" — answer from the list, no LLM.
     if queries.is_what_to_buy(text):
         raw.parsing_status = ParsingStatus.PARSED.value
         items = shopping_service.list_to_buy(db, household_id)
         return replies.format_to_buy(db, items)
+
+    # Read-only "что скоро испортится?" — answer from inventory, no LLM.
+    if queries.is_spoilage(text):
+        raw.parsing_status = ParsingStatus.PARSED.value
+        return replies.format_spoilage(spoilage_service.at_risk(db, household_id))
 
     result = await food_parser.parse(text, service=parse_service)
     if not result.ok:

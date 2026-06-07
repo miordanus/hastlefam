@@ -7,6 +7,7 @@ example responses (§24 confirmation, §25 "что купить?").
 from __future__ import annotations
 
 from app.domain.enums import InventoryStatus, ShoppingPriority, ShoppingReason
+from app.foodops.services import spoilage_service
 from app.foodops.services.inventory_service import ApplyResult, UpdatedItem
 from app.infrastructure.db.models import FoodProduct, ShoppingListItem
 
@@ -18,6 +19,8 @@ PARSE_FAILED = (
 NOTHING_PARSED = "Понял, но не нашёл конкретных продуктов для обновления."
 
 EMPTY_LIST = "Список покупок пуст 🎉"
+
+NO_SPOILAGE_RISK = "Пока ничего критичного — риска порчи не вижу 👍"
 
 _STATUS_RU = {
     InventoryStatus.IN_STOCK.value: "есть",
@@ -99,4 +102,19 @@ def format_to_buy(db, items: list[ShoppingListItem]) -> str:
         lines.append("\nЕщё:")
         for i in rest:
             lines.append(f"- {_shop_name(db, i)}")
+    return "\n".join(lines)
+
+
+def format_spoilage(rows) -> str:
+    if not rows:
+        return NO_SPOILAGE_RISK
+    spoil = [r for r in rows if r.level == spoilage_service.SPOIL_RISK]
+    warn = [r for r in rows if r.level == spoilage_service.WARN]
+    lines = ["Риск порчи:"]
+    if spoil:
+        lines.append("\nСрочно (съесть или выкинуть):")
+        lines += [f"- {r.name}" for r in spoil]
+    if warn:
+        lines.append("\nСкоро надо съесть:")
+        lines += [f"- {r.name}" for r in warn]
     return "\n".join(lines)
