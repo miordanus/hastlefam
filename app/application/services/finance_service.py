@@ -741,6 +741,7 @@ class FinanceService:
             (overdue if occ <= today else upcoming).append(item)
         return {
             "today": today.isoformat(),
+            "accounts": [{"id": k, "name": v} for k, v in acc_names.items()],
             "overdue": overdue,
             "upcoming": upcoming,
             "overdue_rub": round(sum(i["amount_rub"] or 0 for i in overdue), 2),
@@ -799,6 +800,7 @@ class FinanceService:
             (overdue if occ <= today_iso else upcoming).append(item)
         return {
             "today": today_iso,
+            "accounts": [{"id": a["id"], "name": a["name"]} for a in accounts],
             "overdue": overdue,
             "upcoming": upcoming,
             "overdue_rub": round(sum(i["amount_rub"] or 0 for i in overdue), 2),
