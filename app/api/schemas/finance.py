@@ -50,6 +50,9 @@ class TransactionCreate(BaseModel):
     merchant: str | None = None
     user_id: str | None = None
     is_planned: bool = False
+    # Exchange-specific fields (required when direction=exchange)
+    to_currency: str | None = None
+    to_amount: Decimal | None = None
 
     @field_validator("amount")
     @classmethod

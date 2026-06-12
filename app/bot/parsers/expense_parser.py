@@ -27,6 +27,8 @@ _CURRENCY_MAP: dict[str, Currency] = {
     "usdt": Currency.USDT,
     "eur": Currency.EUR,
     "€": Currency.EUR,
+    "amd": Currency.AMD,
+    "֏": Currency.AMD,
 }
 
 _CURRENCY_TOKENS = set(_CURRENCY_MAP.keys())

@@ -590,6 +590,7 @@ def create_transaction(body: TransactionCreate, db: Session = Depends(get_db)) -
         fp = FinanceService._web_fingerprint(
             body.household_id, body.amount, cur, body.merchant, body.occurred_at.isoformat(), dir_
         )
+        is_exchange = dir_ == "exchange"
         row = {
             "id": tx_id,
             "household_id": body.household_id,
@@ -609,6 +610,13 @@ def create_transaction(body: TransactionCreate, db: Session = Depends(get_db)) -
             "is_skipped": False,
             "dedup_fingerprint": fp,
         }
+        if is_exchange and body.to_currency:
+            row["from_amount"] = float(body.amount)
+            row["from_currency"] = cur
+            row["to_currency"] = Currency(body.to_currency).value
+            row["to_amount"] = float(body.to_amount) if body.to_amount else None
+            if body.to_amount and body.amount:
+                row["exchange_rate"] = float(body.to_amount / body.amount)
         from app.infrastructure.supabase import SupabaseClient
         with SupabaseClient(s.supabase_url, s.supabase_service_role_key) as sb:
             sb.post("transactions", [row])
@@ -619,6 +627,8 @@ def create_transaction(body: TransactionCreate, db: Session = Depends(get_db)) -
         direction=body.direction, occurred_at=body.occurred_at, primary_tag=body.primary_tag,
         account_id=body.account_id, merchant=body.merchant, user_id=body.user_id,
         is_planned=body.is_planned,
+        to_currency=body.to_currency,
+        to_amount=body.to_amount,
     )
     return {"ok": True, "id": str(tx.id)}
 
