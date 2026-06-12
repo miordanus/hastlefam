@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     alembic_database_url: str | None = Field(alias='ALEMBIC_DATABASE_URL', default=None)
 
     telegram_bot_token: str | None = Field(alias='TELEGRAM_BOT_TOKEN', default=None)
+    foodops_telegram_bot_token: str | None = Field(alias='FOODOPS_TELEGRAM_BOT_TOKEN', default=None)
     openai_api_key: str | None = Field(alias='OPENAI_API_KEY', default=None)
+    openai_base_url: str | None = Field(alias='OPENAI_BASE_URL', default=None)
     openai_model: str = Field(alias='OPENAI_MODEL', default='gpt-4.1-mini')
     redis_url: str = Field(alias='REDIS_URL', default='redis://localhost:6379/0')
     insights_enabled: bool = Field(alias='INSIGHTS_ENABLED', default=False)

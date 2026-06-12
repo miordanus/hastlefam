@@ -51,6 +51,13 @@ tr:last-child td { border-bottom:none; }
 .btn-gray:hover { background:rgba(113,113,122,0.25); color:var(--text); }
 .inc { color:var(--green); } .exp { color:var(--text); }
 @media (max-width:760px){ td .acts { flex-wrap:wrap; } }
+.tab-bar { max-width:1120px; margin:0 auto; padding:12px 20px 0; display:flex; gap:4px; }
+.tab-btn { background:none; border:1px solid var(--border); border-radius:8px; color:var(--muted); font-size:12px; font-weight:500; padding:5px 14px; cursor:pointer; font-family:inherit; transition:all 0.15s; }
+.tab-btn:hover { color:var(--text); border-color:var(--border2); }
+.tab-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+.week-group { margin-bottom:12px; }
+.week-head { padding:8px 18px; font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; display:flex; justify-content:space-between; }
+.week-total { color:var(--text); }
 /* Edit modal */
 .btn-edit { background:rgba(99,102,241,0.15); color:var(--accent); }
 .btn-edit:hover { background:rgba(99,102,241,0.28); }
@@ -75,14 +82,20 @@ tr:last-child td { border-bottom:none; }
 <div class="h-root"><div class="h-inner">
   <div class="h-brand"><span class="h-dot"></span><span class="h-name">HastleFam</span></div>
   <div class="h-right">
+    <a class="h-link" href="/finance/health?household_id={{ household_id or '' }}">Главная</a>
     <a class="h-link" href="/finance/report?household_id={{ household_id or '' }}">Отчёт</a>
-    <a class="h-link" href="/finance/health?household_id={{ household_id or '' }}">Здоровье</a>
     <a class="h-link" href="/finance/quality?household_id={{ household_id or '' }}">Качество</a>
     <a class="h-link" href="/finance/accounts?household_id={{ household_id or '' }}">Счета</a>
     <a class="h-link" href="/finance/recurring?household_id={{ household_id or '' }}">Регулярные</a>
     <a class="h-link" href="/auth/logout">Выйти</a>
   </div>
 </div></div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" id="tab-overdue" onclick="switchTab('overdue')">Просрочено</button>
+  <button class="tab-btn" id="tab-upcoming" onclick="switchTab('upcoming')">Предстоит</button>
+  <button class="tab-btn" id="tab-forecast" onclick="switchTab('forecast')">Прогноз</button>
+</div>
 
 <script type="application/json" id="planned-data">{{ planned_data | tojson }}</script>
 <script type="application/json" id="hid-data">{{ (household_id or '') | tojson }}</script>
@@ -109,6 +122,15 @@ const fmtRub = a => `${Math.round(Number(a)||0).toLocaleString('ru-RU')} ₽`;
 function fmtNative(a, cur){ return `${Number(a).toLocaleString('ru-RU')} ${String(cur||'').toUpperCase()}`; }
 function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?esc(iso):d.toLocaleDateString('ru-RU',{day:'2-digit',month:'short'}); }
 function plural(n,one,few,many){ const a=n%10,b=n%100; if(a===1&&b!==11)return one; if(a>=2&&a<=4&&(b<12||b>14))return few; return many; }
+
+let activeTab = 'overdue';
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('tab-' + tab);
+  if (btn) btn.classList.add('active');
+  render();
+}
 
 async function act(id, action){
   const fd = new FormData(); fd.set('action', action);
@@ -207,7 +229,7 @@ function row(it){
     : fmtRub(it.amount);
   return `<tr>
     <td class="t-num">${fmtDate(it.occurred_at)}</td>
-    <td class="t-name">${esc(it.merchant_raw) || '—'}${it.primary_tag?` <span class="tag">${esc(it.primary_tag)}</span>`:''}</td>
+    <td class="t-name">${esc(it.merchant_raw) || esc(it.title) || '—'}${it.primary_tag?` <span class="tag">${esc(it.primary_tag)}</span>`:''}</td>
     <td class="t-num">${esc(it.account_name)||'—'}</td>
     <td class="mono ${it.direction==='income'?'inc':'exp'}">${sign}${amt}</td>
     <td><div class="acts">
@@ -227,19 +249,58 @@ function panel(title, items, totalRub, extraClass){
     <tbody>${items.map(row).join('')}</tbody></table></div>`;
 }
 
+function forecastRow(it){
+  const sign = it.direction === 'income' ? '+' : '−';
+  const isNative = it.currency && it.currency.toLowerCase() !== 'rub';
+  const amt = isNative ? fmtNative(it.amount, it.currency) : fmtRub(it.amount);
+  return `<tr>
+    <td class="t-num">${fmtDate(it.due_date)}</td>
+    <td class="t-name">${esc(it.title) || '—'}${it.primary_tag?` <span class="tag">${esc(it.primary_tag)}</span>`:''}</td>
+    <td></td>
+    <td class="mono ${it.direction==='income'?'inc':'exp'}">${sign}${amt}</td>
+    <td></td>
+  </tr>`;
+}
+
+function forecastPanel(){
+  const weeks = (D && D.forecast_weeks) || [];
+  if(!weeks.length) return `<div class="panel"><div class="panel-empty">Нет запланированных платежей в ближайшие 6 недель.</div></div>`;
+  return weeks.map(w => {
+    const parts = [];
+    if (w.total_expense) parts.push(`−${fmtRub(w.total_expense)}`);
+    if (w.total_income)  parts.push(`+${fmtRub(w.total_income)}`);
+    const totalStr = parts.join(' / ') || fmtRub(0);
+    const head = `<div class="week-head"><span>${esc(w.week_label)}</span><span class="week-total">${totalStr}</span></div>`;
+    return `<div class="panel week-group">${head}
+      <table><thead><tr><th>Дата</th><th>Что</th><th></th><th>Сумма</th><th></th></tr></thead>
+      <tbody>${w.items.map(forecastRow).join('')}</tbody></table></div>`;
+  }).join('');
+}
+
 function render(){
   const root = document.getElementById('root');
   if(!D){ root.innerHTML = '<div class="panel-empty">Нет household_id — данные не загружены.</div>'; return; }
+
   [...D.overdue, ...D.upcoming].forEach(it => { BYID[it.id] = it; });
+
+  if(activeTab === 'forecast'){
+    root.innerHTML = forecastPanel();
+    return;
+  }
+
+
   const oc = D.overdue.length, uc = D.upcoming.length;
   const hero = `<div class="hero"><div class="hero-label">Планы к разбору</div>
     <div class="hero-row">
-      <span class="hero-num ${oc?'':''}" style="color:${oc?'var(--yellow)':'var(--green)'}">${oc}</span>
+      <span class="hero-num" style="color:${oc?'var(--yellow)':'var(--green)'}">${oc}</span>
       <span class="hero-cap">${oc?`${plural(oc,'просроченный','просроченных','просроченных')} · ${fmtRub(D.overdue_rub)}`:'нет просроченных'} · впереди ${uc} на ${fmtRub(D.upcoming_rub)}</span>
     </div></div>`;
-  root.innerHTML = hero
-    + panel('Просрочено', D.overdue, D.overdue_rub, 'overdue')
-    + panel('Предстоит', D.upcoming, D.upcoming_rub);
+
+  if(activeTab === 'overdue'){
+    root.innerHTML = hero + panel('Просрочено', D.overdue, D.overdue_rub, 'overdue');
+  } else {
+    root.innerHTML = hero + panel('Предстоит', D.upcoming, D.upcoming_rub);
+  }
 }
 render();
 document.getElementById('edit-overlay').addEventListener('click', e => { if(e.target.id === 'edit-overlay') closeEdit(); });

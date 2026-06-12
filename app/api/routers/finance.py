@@ -62,6 +62,12 @@ def _run_planned(db: Session, household_id: str) -> dict:
     return FinanceService(db).planned_workbench(household_id)
 
 
+def _run_forecast(db: Session, household_id: str) -> dict:
+    if _use_rest():
+        return FinanceService(None).forecast_by_week_via_rest(household_id)
+    return FinanceService(db).forecast_by_week(household_id)
+
+
 def _run_quality(db: Session, household_id: str) -> dict:
     if _use_rest():
         return FinanceService(None).untagged_transactions_via_rest(household_id)
@@ -272,6 +278,12 @@ def planned_page(
     """Planned-items workbench (#2): close / reschedule / skip in one place."""
     hid = household_id or getattr(request.state, "household_id", None)
     data = _run_planned(db, hid) if hid else None
+    if data and hid:
+        try:
+            forecast = _run_forecast(db, hid)
+            data["forecast_weeks"] = forecast.get("weeks", [])
+        except Exception:
+            data["forecast_weeks"] = []
     return templates.TemplateResponse(
         request,
         "planned.html",
@@ -285,7 +297,13 @@ def planned_data(
     db: Session = Depends(get_db),
 ) -> dict:
     """JSON endpoint — planned workbench payload."""
-    return _run_planned(db, household_id)
+    data = _run_planned(db, household_id)
+    try:
+        forecast = _run_forecast(db, household_id)
+        data["forecast_weeks"] = forecast.get("weeks", [])
+    except Exception:
+        data["forecast_weeks"] = []
+    return data
 
 
 @router.get("/quality", response_class=HTMLResponse)

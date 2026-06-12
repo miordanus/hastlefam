@@ -2,7 +2,7 @@ import uuid
 from sqlalchemy import text
 from app.infrastructure.db.session import SessionLocal
 from app.infrastructure.db.base import DB_SCHEMA
-from app.seeds import seed_areas, seed_finance_categories, seed_owners, seed_users
+from app.seeds import seed_areas, seed_finance_categories, seed_owners, seed_users, seed_foodops
 
 
 def main():
@@ -18,6 +18,7 @@ def main():
         seed_finance_categories.run(db, household_id)
         seed_owners.run(db, household_id)
         seed_users.run(db, household_id)
+        seed_foodops.run(db, household_id)
 
 
 if __name__ == '__main__':

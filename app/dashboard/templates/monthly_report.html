@@ -368,11 +368,11 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
       <button class="h-tab"        data-tab="annual"    onclick="switchTab('annual')">Годовой отчёт</button>
       <button class="h-tab"        data-tab="cashflow"  onclick="switchTab('cashflow')">Кэшфлоу</button>
       <span style="flex:1"></span>
+      <a class="h-tab h-tab-link" id="nav-health"   href="/finance/health">Главная</a>
       <a class="h-tab h-tab-link" id="nav-planned"  href="/finance/planned">Планы</a>
       <a class="h-tab h-tab-link" id="nav-quality"  href="/finance/quality">Качество</a>
       <a class="h-tab h-tab-link" id="nav-accounts" href="/finance/accounts">Счета</a>
       <a class="h-tab h-tab-link" id="nav-recurring" href="/finance/recurring">Регулярные</a>
-      <a class="h-tab h-tab-link" id="nav-health"   href="/finance/health">Здоровье</a>
     </nav>
     <div class="h-right">
       <div class="h-period">
@@ -722,11 +722,11 @@ if (_INJECTED && _INJECTED.accounts) {
   HOUSEHOLD_ID = new URLSearchParams(location.search).get('household_id');
 }
 
-// Wire nav links (Планы / Качество / Счета / Здоровье) to carry the household id.
+// Wire nav links (Главная / Планы / Качество / Счета) to carry the household id.
 (() => {
   const hh = HOUSEHOLD_ID || new URLSearchParams(location.search).get('household_id');
   if (!hh) return;
-  ['nav-planned','nav-quality','nav-accounts','nav-recurring','nav-health'].forEach(id => {
+  ['nav-health','nav-planned','nav-quality','nav-accounts','nav-recurring'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.href += (el.href.includes('?') ? '&' : '?') + 'household_id=' + encodeURIComponent(hh);
   });

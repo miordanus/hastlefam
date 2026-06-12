@@ -15,4 +15,8 @@ PROMPT_CONTRACTS = {
         'purpose': 'Generate weekly digest draft from structured sprint+finance inputs.',
         'failure_behavior': 'Fallback to static digest template.',
     },
+    'food_parse': {
+        'purpose': 'Split one free-text grocery message into multiple structured inventory/shopping actions without inventing products.',
+        'failure_behavior': 'Return validation error; leave raw_input as needs_review and ask user to rephrase.',
+    },
 }
