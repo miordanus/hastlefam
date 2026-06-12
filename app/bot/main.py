@@ -25,6 +25,7 @@ from app.bot.handlers.cashflow import router as cashflow_router
 from app.bot.handlers.review import router as review_router
 from app.bot.handlers.recurring import router as recurring_router
 from app.bot.handlers.dashboard import router as dashboard_router
+from app.bot.handlers.forecast import router as forecast_router
 from app.bot.middlewares.logging import LoggingMiddleware
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.logging.logger import configure_logging
@@ -181,6 +182,7 @@ async def main() -> None:
     dp.include_router(review_router)
     dp.include_router(recurring_router)
     dp.include_router(dashboard_router)
+    dp.include_router(forecast_router)
     dp.include_router(capture_router)
 
     # Catch-all error handler — log every unhandled exception from any handler
