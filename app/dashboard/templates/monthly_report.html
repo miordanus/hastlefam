@@ -678,6 +678,23 @@ button:focus-visible, select:focus-visible { outline:2px solid var(--accent); ou
       <label class="form-label">Описание (необязательно)</label>
       <input class="form-input" id="tm-merchant" type="text" placeholder="">
     </div>
+    <!-- Exchange-only fields, shown/hidden by direction select -->
+    <div id="tm-exchange-row" style="display:none">
+      <div class="form-row2">
+        <div class="form-field">
+          <label class="form-label">Получаю (валюта)</label>
+          <select class="form-select" id="tm-to-currency"></select>
+        </div>
+        <div class="form-field">
+          <label class="form-label">Получаю (сумма)</label>
+          <input class="form-input mono" id="tm-to-amount" type="number" step="0.01" inputmode="decimal" placeholder="0">
+        </div>
+      </div>
+    </div>
+    <!-- Auto-planned hint: shown when date is in the future for expense/income -->
+    <div id="tm-planned-hint" style="display:none;font-size:12px;color:var(--yellow,#f59e0b);margin-top:4px">
+      Будущая дата → помечается как плановая
+    </div>
     <datalist id="tag-suggest"></datalist>
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeTxModal()">Отмена</button>
@@ -1799,12 +1816,26 @@ function _fillTagSuggest() {
 
 // ── Add transaction (modal) ───────────────────────────────────────────────
 let _txModalInit = false;
+
+function _updateTxModalHints() {
+  const dir = document.getElementById('tm-direction').value;
+  const dateVal = document.getElementById('tm-date').value;
+  const isExchange = dir === 'exchange';
+  document.getElementById('tm-exchange-row').style.display = isExchange ? '' : 'none';
+  const isFuture = dateVal > TODAY;
+  const showPlanned = isFuture && (dir === 'expense' || dir === 'income');
+  document.getElementById('tm-planned-hint').style.display = showPlanned ? '' : 'none';
+}
+
 function openTxModal() {
   if (!_txModalInit) {
     document.getElementById('tm-currency').innerHTML = CURRENCIES.map(c => `<option value="${c}">${c}</option>`).join('');
+    document.getElementById('tm-to-currency').innerHTML = CURRENCIES.map(c => `<option value="${c}">${c}</option>`).join('');
     document.getElementById('tm-direction').innerHTML = DIRECTIONS.map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
     document.getElementById('tm-account').innerHTML =
       '<option value="">— без счёта —</option>' + ACCOUNTS.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+    document.getElementById('tm-direction').addEventListener('change', _updateTxModalHints);
+    document.getElementById('tm-date').addEventListener('change', _updateTxModalHints);
     _txModalInit = true;
   }
   // Reset fields each open.
@@ -1817,6 +1848,9 @@ function openTxModal() {
   document.getElementById('tm-account').value = ACCOUNTS[0] ? ACCOUNTS[0].id : '';
   document.getElementById('tm-tag').value = currentFilter.tag || '';
   document.getElementById('tm-merchant').value = '';
+  document.getElementById('tm-to-amount').value = '';
+  document.getElementById('tm-to-currency').value = 'RUB';
+  _updateTxModalHints();
   _fillTagSuggest();
   document.getElementById('tx-modal-overlay').classList.add('open');
   document.getElementById('tm-amount').focus();
@@ -1828,19 +1862,36 @@ async function submitTxModal() {
   if (isNaN(amount) || amount === 0) { alert('Укажите сумму'); return; }
   const date = document.getElementById('tm-date').value;
   if (!date) { alert('Укажите дату'); return; }
+  const direction = document.getElementById('tm-direction').value;
   const tag = document.getElementById('tm-tag').value.trim();
   const acc = document.getElementById('tm-account').value;
   const merchant = document.getElementById('tm-merchant').value.trim();
+
+  // Auto-mark future expense/income as planned
+  const isFuture = date > TODAY;
+  const autoPlanned = isFuture && (direction === 'expense' || direction === 'income');
+
   const body = {
     household_id: HOUSEHOLD_ID,
     amount: amount,
     currency: document.getElementById('tm-currency').value,
-    direction: document.getElementById('tm-direction').value,
+    direction: direction,
     occurred_at: date,
+    is_planned: autoPlanned,
   };
   if (tag) body.primary_tag = tag;
   if (acc) body.account_id = acc;
   if (merchant) body.merchant = merchant;
+
+  // Exchange-specific fields
+  if (direction === 'exchange') {
+    const toAmt = parseFloat(document.getElementById('tm-to-amount').value);
+    const toCur = document.getElementById('tm-to-currency').value;
+    if (!toCur) { alert('Укажите целевую валюту обмена'); return; }
+    if (isNaN(toAmt) || toAmt === 0) { alert('Укажите получаемую сумму'); return; }
+    body.to_currency = toCur;
+    body.to_amount = toAmt;
+  }
 
   const btn = document.getElementById('tm-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Создание…'; }

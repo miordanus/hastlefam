@@ -236,7 +236,7 @@ function row(it){
       <button class="btn btn-paid" onclick="act('${it.id}','paid')">✓ Оплачено</button>
       <button class="btn btn-gray" onclick="reschedule('${it.id}','${it.occurred_at}')">🗓 Перенести</button>
       <button class="btn btn-edit" onclick="openEdit('${it.id}')">✎ Изменить</button>
-      <button class="btn btn-gray" onclick="act('${it.id}','skip')">✕ Пропустить</button>
+      <button class="btn btn-gray" title="Платёж исчезнет из плана и прогноза, но останется в базе" onclick="act('${it.id}','skip')">✕ Пропустить</button>
     </div></td>
   </tr>`;
 }

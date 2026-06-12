@@ -582,6 +582,8 @@ class FinanceService:
 
     def upcoming_transactions(self, household_id: str, until_date: date | None = None) -> list[dict[str, Any]]:
         """Planned transactions not yet skipped: is_planned=True, is_skipped=False, occurred_at > now."""
+        from app.application.services.fx_service import convert_to_rub
+
         today = datetime.now(timezone.utc).date()
         tomorrow_dt = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(days=1)
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
@@ -605,18 +607,21 @@ class FinanceService:
             .all()
         )
 
-        return [
-            {
+        out = []
+        for r in rows:
+            cur = r.currency.value if r.currency else "RUB"
+            rub = convert_to_rub(Decimal(str(r.amount)), cur, r.occurred_at.date(), self.db)
+            out.append({
                 "id": str(r.id),
                 "title": r.merchant_raw or "",
                 "amount": r.amount,
-                "currency": r.currency.value if r.currency else "RUB",
+                "currency": cur,
                 "due_date": r.occurred_at.date().isoformat(),
                 "primary_tag": r.primary_tag,
                 "direction": r.direction.value,
-            }
-            for r in rows
-        ]
+                "amount_rub": float(rub) if rub is not None else float(r.amount),
+            })
+        return out
 
     def overdue_planned_items(self, household_id: str) -> list[dict[str, Any]]:
         """Planned, not-skipped transactions whose date has already passed
@@ -843,14 +848,17 @@ class FinanceService:
 
         result_weeks = []
         for (ws, we), week_items in sorted(weeks_map.items()):
-            total_exp = sum(float(i["amount"]) for i in week_items if i["direction"] == "expense")
-            total_inc = sum(float(i["amount"]) for i in week_items if i["direction"] == "income")
+            total_exp = sum(i.get("amount_rub", float(i["amount"])) for i in week_items if i["direction"] == "expense")
+            total_inc = sum(i.get("amount_rub", float(i["amount"])) for i in week_items if i["direction"] == "income")
             result_weeks.append({
                 "week_label": _forecast_week_label(ws, we),
                 "week_start": ws.isoformat(),
                 "week_end": we.isoformat(),
-                "total_expense": total_exp,
-                "total_income": total_inc,
+                "total_expense_rub": round(total_exp, 2),
+                "total_income_rub": round(total_inc, 2),
+                # kept for backward compat
+                "total_expense": round(total_exp, 2),
+                "total_income": round(total_inc, 2),
                 "items": week_items,
             })
 
@@ -881,24 +889,36 @@ class FinanceService:
                 ],
                 "order": "occurred_at.asc",
             })
+            fx_window_start = (today - timedelta(days=14)).isoformat()
+            fx_rows = sb.get("fx_rates", {
+                "select": "from_currency,rate,date",
+                "to_currency": "eq.RUB",
+                "date": [f"gte.{fx_window_start}", f"lte.{until.isoformat()}"],
+                "order": "date.desc",
+            })
+        fx_by_cur = _build_fx_lookup(fx_rows)
 
         # Exclude exchange/transfer in Python (direction filter would need
         # `not.in.(exchange,transfer)` which requires an `and` param — the
         # list-value trick only serialises repeated same-key params via httpx)
         excluded = {"exchange", "transfer"}
-        items = [
-            {
+        items = []
+        for r in (rows or []):
+            if r.get("direction") in excluded:
+                continue
+            occ = r["occurred_at"][:10]
+            cur = (r.get("currency") or "RUB").upper()
+            amount_rub = _rub_on_date(float(r["amount"]), cur, occ, fx_by_cur)
+            items.append({
                 "id": r["id"],
                 "title": r.get("merchant_raw") or "",
                 "amount": r["amount"],
-                "currency": (r.get("currency") or "RUB").upper(),
-                "due_date": r["occurred_at"][:10],
+                "currency": cur,
+                "due_date": occ,
                 "primary_tag": r.get("primary_tag"),
                 "direction": r.get("direction", "expense"),
-            }
-            for r in (rows or [])
-            if r.get("direction") not in excluded
-        ]
+                "amount_rub": amount_rub,
+            })
 
         weeks_map: dict[tuple, list] = {}
         for item in items:
@@ -909,14 +929,17 @@ class FinanceService:
 
         result_weeks = []
         for (ws, we), week_items in sorted(weeks_map.items()):
-            total_exp = sum(float(i["amount"]) for i in week_items if i["direction"] == "expense")
-            total_inc = sum(float(i["amount"]) for i in week_items if i["direction"] == "income")
+            total_exp = sum(i.get("amount_rub", float(i["amount"])) for i in week_items if i["direction"] == "expense")
+            total_inc = sum(i.get("amount_rub", float(i["amount"])) for i in week_items if i["direction"] == "income")
             result_weeks.append({
                 "week_label": _forecast_week_label(ws, we),
                 "week_start": ws.isoformat(),
                 "week_end": we.isoformat(),
-                "total_expense": total_exp,
-                "total_income": total_inc,
+                "total_expense_rub": round(total_exp, 2),
+                "total_income_rub": round(total_inc, 2),
+                # kept for backward compat
+                "total_expense": round(total_exp, 2),
+                "total_income": round(total_inc, 2),
                 "items": week_items,
             })
 
@@ -1664,6 +1687,8 @@ class FinanceService:
         merchant: str | None = None,
         user_id: str | None = None,
         is_planned: bool = False,
+        to_currency: str | None = None,
+        to_amount: Decimal | None = None,
     ) -> Transaction:
         """Create a transaction from the web UI (source='web'). Computes a
         dedup_fingerprint with the 'web' source suffix."""
@@ -1677,6 +1702,14 @@ class FinanceService:
         occ = self._as_datetime(occurred_at)
         tag = self._clean_tag(primary_tag)
         fp = self._web_fingerprint(hid, amount, cur.value, merchant, occ.date().isoformat(), dir_.value)
+
+        is_exchange = dir_ == TransactionDirection.EXCHANGE
+        exchange_rate = None
+        if is_exchange and to_amount and amount:
+            try:
+                exchange_rate = Decimal(str(to_amount)) / Decimal(str(amount))
+            except Exception:
+                pass
 
         tx = Transaction(
             id=_uuid.uuid4(),
@@ -1696,6 +1729,11 @@ class FinanceService:
             is_internal_transfer=False,
             is_skipped=False,
             dedup_fingerprint=fp,
+            from_amount=amount if is_exchange else None,
+            from_currency=cur.value if is_exchange else None,
+            to_amount=Decimal(str(to_amount)) if is_exchange and to_amount is not None else None,
+            to_currency=to_currency if is_exchange else None,
+            exchange_rate=exchange_rate,
         )
         self.db.add(tx)
         self.db.commit()
@@ -2188,12 +2226,15 @@ class FinanceService:
                 if latest else None
             )
 
+        from app.application.services.fx_service import convert_to_rub as _convert_to_rub
         tag_map: dict[str, float] = {}
         for tx in txs:
             if tx.is_planned or tx.direction != TransactionDirection.EXPENSE:
                 continue
             tag = tx.primary_tag or "(без тега)"
-            tag_map[tag] = tag_map.get(tag, 0.0) + float(tx.amount)
+            cur = tx.currency.value if tx.currency else "rub"
+            rub = _convert_to_rub(Decimal(str(tx.amount)), cur, tx.occurred_at.date(), self.db)
+            tag_map[tag] = tag_map.get(tag, 0.0) + float(rub if rub is not None else tx.amount)
 
         tag_summary = [
             {"tag": t, "total_rub": v}
@@ -2338,7 +2379,7 @@ class FinanceService:
 
             if not tx["is_planned"] and tx["direction"] == "expense":
                 tag = tx.get("primary_tag") or "(без тега)"
-                tag_map[tag] = tag_map.get(tag, 0.0) + float(tx["amount"])
+                tag_map[tag] = tag_map.get(tag, 0.0) + _rub_on_date(float(tx["amount"]), tx.get("currency"), occurred_str, fx_by_cur)
 
             out_txs.append({
                 "id": tx["id"],
