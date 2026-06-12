@@ -146,6 +146,19 @@ def _sum_balances_rub(bal_accounts: list[dict], convert) -> tuple[float, bool]:
     return round(total, 2), fx_complete
 
 
+_RU_MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+
+def _forecast_week_label(week_start: date, week_end: date) -> str:
+    """Human-readable week label in Russian, e.g. '12–18 июн' or '29 июн–5 июл'."""
+    if week_start.month == week_end.month:
+        return f"{week_start.day}–{week_end.day} {_RU_MONTHS[week_start.month - 1]}"
+    return (
+        f"{week_start.day} {_RU_MONTHS[week_start.month - 1]}–"
+        f"{week_end.day} {_RU_MONTHS[week_end.month - 1]}"
+    )
+
+
 class FinanceService:
     def __init__(self, db: Session):
         self.db = db
@@ -647,6 +660,111 @@ class FinanceService:
             "upcoming": upcoming,
             "overdue_rub": round(sum(i["amount_rub"] or 0 for i in overdue), 2),
             "upcoming_rub": round(sum(i["amount_rub"] or 0 for i in upcoming), 2),
+        }
+
+    # ─── Forecast: upcoming planned grouped by ISO week (#3) ─────────────────
+
+    def forecast_by_week(self, household_id: str, weeks: int = 6) -> dict[str, Any]:
+        """Upcoming planned transactions grouped into ISO-week buckets.
+
+        Returns {"overdue": [...], "weeks": [{"week_label", "week_start",
+        "week_end", "total_expense", "total_income", "items"}, ...]}.
+        Mirror changes in forecast_by_week_via_rest().
+        """
+        today = datetime.now(timezone.utc).date()
+        until = today + timedelta(days=weeks * 7)
+
+        items = self.upcoming_transactions(household_id, until_date=until)
+
+        weeks_map: dict[tuple, list] = {}
+        for item in items:
+            item_date = date.fromisoformat(item["due_date"])
+            week_start = item_date - timedelta(days=item_date.weekday())
+            week_end = week_start + timedelta(days=6)
+            weeks_map.setdefault((week_start, week_end), []).append(item)
+
+        result_weeks = []
+        for (ws, we), week_items in sorted(weeks_map.items()):
+            total_exp = sum(float(i["amount"]) for i in week_items if i["direction"] == "expense")
+            total_inc = sum(float(i["amount"]) for i in week_items if i["direction"] == "income")
+            result_weeks.append({
+                "week_label": _forecast_week_label(ws, we),
+                "week_start": ws.isoformat(),
+                "week_end": we.isoformat(),
+                "total_expense": total_exp,
+                "total_income": total_inc,
+                "items": week_items,
+            })
+
+        return {
+            "overdue": self.overdue_planned_items(household_id),
+            "weeks": result_weeks,
+        }
+
+    def forecast_by_week_via_rest(self, household_id: str, weeks: int = 6) -> dict[str, Any]:
+        """REST variant of forecast_by_week(). Keep in sync."""
+        from app.infrastructure.config.settings import get_settings
+        from app.infrastructure.supabase import SupabaseClient
+
+        settings = get_settings()
+        today = datetime.now(timezone.utc).date()
+        until = today + timedelta(days=weeks * 7)
+        tomorrow = today + timedelta(days=1)
+
+        with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
+            rows = sb.get("transactions", {
+                "select": "id,merchant_raw,amount,currency,direction,occurred_at,primary_tag",
+                "household_id": f"eq.{household_id}",
+                "is_planned": "eq.true",
+                "is_skipped": "eq.false",
+                "occurred_at": [
+                    f"gte.{tomorrow.isoformat()}T00:00:00Z",
+                    f"lte.{until.isoformat()}T23:59:59Z",
+                ],
+                "order": "occurred_at.asc",
+            })
+
+        # Exclude exchange/transfer in Python (direction filter would need
+        # `not.in.(exchange,transfer)` which requires an `and` param — the
+        # list-value trick only serialises repeated same-key params via httpx)
+        excluded = {"exchange", "transfer"}
+        items = [
+            {
+                "id": r["id"],
+                "title": r.get("merchant_raw") or "",
+                "amount": r["amount"],
+                "currency": (r.get("currency") or "RUB").upper(),
+                "due_date": r["occurred_at"][:10],
+                "primary_tag": r.get("primary_tag"),
+                "direction": r.get("direction", "expense"),
+            }
+            for r in (rows or [])
+            if r.get("direction") not in excluded
+        ]
+
+        weeks_map: dict[tuple, list] = {}
+        for item in items:
+            item_date = date.fromisoformat(item["due_date"])
+            ws = item_date - timedelta(days=item_date.weekday())
+            we = ws + timedelta(days=6)
+            weeks_map.setdefault((ws, we), []).append(item)
+
+        result_weeks = []
+        for (ws, we), week_items in sorted(weeks_map.items()):
+            total_exp = sum(float(i["amount"]) for i in week_items if i["direction"] == "expense")
+            total_inc = sum(float(i["amount"]) for i in week_items if i["direction"] == "income")
+            result_weeks.append({
+                "week_label": _forecast_week_label(ws, we),
+                "week_start": ws.isoformat(),
+                "week_end": we.isoformat(),
+                "total_expense": total_exp,
+                "total_income": total_inc,
+                "items": week_items,
+            })
+
+        return {
+            "overdue": self.overdue_planned_items_via_rest(household_id),
+            "weeks": result_weeks,
         }
 
     # ─── Quality: untagged transactions + bulk tagging (#4) ───────────────────
