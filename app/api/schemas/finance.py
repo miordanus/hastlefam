@@ -92,6 +92,17 @@ class TransactionUpdate(BaseModel):
     primary_tag: str | None = None
     account_id: str | None = None
     merchant: str | None = None
+    # Operator-set real RUB-per-unit rate for this txn (overrides CBR/applied rate
+    # when valuing it to RUB). Send null/"" to clear and fall back to real/CBR.
+    applied_rate_override: Decimal | None = None
+
+
+class RecurringCreate(BaseModel):
+    household_id: str
+    title: str
+    amount: Decimal
+    currency: str = "RUB"
+    day_of_month: int
 
 
 class BudgetUpsert(BaseModel):

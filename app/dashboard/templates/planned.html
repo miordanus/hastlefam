@@ -58,6 +58,24 @@ tr:last-child td { border-bottom:none; }
 .week-group { margin-bottom:12px; }
 .week-head { padding:8px 18px; font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; display:flex; justify-content:space-between; }
 .week-total { color:var(--text); }
+/* Edit modal */
+.btn-edit { background:rgba(99,102,241,0.15); color:var(--accent); }
+.btn-edit:hover { background:rgba(99,102,241,0.28); }
+.m-overlay { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,0.6); backdrop-filter:blur(3px); display:none; align-items:center; justify-content:center; padding:20px; }
+.m-overlay.open { display:flex; }
+.m-card { width:100%; max-width:440px; background:var(--surface); border:1px solid var(--border2); border-radius:14px; padding:22px; max-height:90dvh; overflow:auto; }
+.m-title { font-size:15px; font-weight:600; color:#fff; margin-bottom:16px; }
+.f-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.f-field { display:flex; flex-direction:column; gap:5px; margin-bottom:12px; }
+.f-field.full { grid-column:1 / -1; }
+.f-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; }
+.f-input, .f-select { width:100%; background:var(--surface2); border:1px solid var(--border2); border-radius:7px; color:var(--text); font-family:inherit; font-size:13px; padding:8px 10px; }
+.f-input:focus, .f-select:focus { outline:none; border-color:var(--accent); }
+.m-acts { display:flex; gap:8px; justify-content:flex-end; margin-top:8px; }
+.btn-ghost { background:transparent; color:var(--muted); border:1px solid var(--border2); padding:8px 14px; border-radius:7px; cursor:pointer; font-family:inherit; font-size:13px; }
+.btn-ghost:hover { color:var(--text); }
+.btn-primary { background:var(--accent); color:#fff; border:none; padding:8px 16px; border-radius:7px; cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; }
+.btn-primary:disabled { opacity:0.6; cursor:default; }
 </style>
 </head>
 <body>
@@ -68,6 +86,7 @@ tr:last-child td { border-bottom:none; }
     <a class="h-link" href="/finance/report?household_id={{ household_id or '' }}">Отчёт</a>
     <a class="h-link" href="/finance/quality?household_id={{ household_id or '' }}">Качество</a>
     <a class="h-link" href="/finance/accounts?household_id={{ household_id or '' }}">Счета</a>
+    <a class="h-link" href="/finance/recurring?household_id={{ household_id or '' }}">Регулярные</a>
     <a class="h-link" href="/auth/logout">Выйти</a>
   </div>
 </div></div>
@@ -83,9 +102,20 @@ tr:last-child td { border-bottom:none; }
 
 <div class="container" id="root"><div class="panel-empty">Загрузка…</div></div>
 
+<div class="m-overlay" id="edit-overlay">
+  <div class="m-card">
+    <div class="m-title">Изменить операцию</div>
+    <div id="edit-body"></div>
+  </div>
+</div>
+
 <script>
 const D = (() => { try { return JSON.parse(document.getElementById('planned-data').textContent || 'null'); } catch(e){ return null; } })();
 const HID = (() => { try { return JSON.parse(document.getElementById('hid-data').textContent || '""'); } catch(e){ return ''; } })();
+const ACCOUNTS = (D && D.accounts) || [];
+const CURRENCIES = ['RUB','USD','USDT','EUR','AMD'];
+const DIRECTIONS = [['expense','Расход'],['income','Доход'],['exchange','Обмен'],['transfer','Перевод']];
+const BYID = {};
 
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmtRub = a => `${Math.round(Number(a)||0).toLocaleString('ru-RU')} ₽`;
@@ -124,6 +154,73 @@ async function reschedule(id, cur){
   } catch(e){ alert('Ошибка: '+e.message); }
 }
 
+// ── Full edit (pop-up modal) ──────────────────────────────────────────────
+function openEdit(id){
+  const it = BYID[id];
+  if(!it){ return; }
+  const curUp = (it.currency || 'rub').toUpperCase();
+  const accOpts = '<option value="">— без счёта —</option>' +
+    ACCOUNTS.map(a => `<option value="${a.id}" ${a.id===it.account_id?'selected':''}>${esc(a.name)}</option>`).join('');
+  const curOpts = CURRENCIES.map(c => `<option value="${c}" ${c===curUp?'selected':''}>${c}</option>`).join('');
+  const dirOpts = DIRECTIONS.map(([v,l]) => `<option value="${v}" ${v===it.direction?'selected':''}>${l}</option>`).join('');
+  document.getElementById('edit-body').innerHTML = `
+    <div class="f-grid">
+      <div class="f-field"><label class="f-label">Сумма</label>
+        <input class="f-input mono" id="ed-amount" type="number" step="0.01" value="${it.amount}"></div>
+      <div class="f-field"><label class="f-label">Валюта</label>
+        <select class="f-select" id="ed-currency">${curOpts}</select></div>
+      <div class="f-field"><label class="f-label">Направление</label>
+        <select class="f-select" id="ed-direction">${dirOpts}</select></div>
+      <div class="f-field"><label class="f-label">Дата</label>
+        <input class="f-input mono" id="ed-date" type="date" value="${(it.occurred_at||'').slice(0,10)}"></div>
+    </div>
+    <div class="f-field full"><label class="f-label">Счёт</label>
+      <select class="f-select" id="ed-account">${accOpts}</select></div>
+    <div class="f-field full"><label class="f-label">Контрагент</label>
+      <input class="f-input" id="ed-merchant" type="text" value="${esc(it.merchant_raw || '')}"></div>
+    <div class="f-field full"><label class="f-label">Тег</label>
+      <input class="f-input" id="ed-tag" type="text" value="${esc(it.primary_tag || '')}"></div>
+    <div class="m-acts">
+      <button class="btn-ghost" onclick="closeEdit()">Отмена</button>
+      <button class="btn-primary" id="ed-save" onclick="saveEdit('${id}')">Сохранить</button>
+    </div>`;
+  document.getElementById('edit-overlay').classList.add('open');
+}
+function closeEdit(){ document.getElementById('edit-overlay').classList.remove('open'); }
+async function saveEdit(id){
+  const it = BYID[id];
+  if(!it){ return; }
+  const body = {};
+  const amount = parseFloat(document.getElementById('ed-amount').value);
+  if(!isNaN(amount) && amount !== Number(it.amount)) body.amount = amount;
+  const cur = document.getElementById('ed-currency').value;
+  if(cur && cur !== (it.currency || '').toUpperCase()) body.currency = cur;
+  const dir = document.getElementById('ed-direction').value;
+  if(dir && dir !== it.direction) body.direction = dir;
+  const dt = document.getElementById('ed-date').value;
+  if(dt && dt !== (it.occurred_at || '').slice(0,10)) body.occurred_at = dt;
+  const acc = document.getElementById('ed-account').value;
+  if(acc !== (it.account_id || '')) body.account_id = acc;
+  const merch = document.getElementById('ed-merchant').value.trim();
+  if(merch !== (it.merchant_raw || '')) body.merchant = merch;
+  const tag = document.getElementById('ed-tag').value.trim();
+  if(tag !== (it.primary_tag || '')) body.primary_tag = tag;
+  if(Object.keys(body).length === 0){ closeEdit(); return; }
+  const btn = document.getElementById('ed-save');
+  if(btn){ btn.disabled = true; btn.textContent = 'Сохранение…'; }
+  try {
+    const r = await fetch(`/finance/transactions/${id}/edit`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    if(!r.ok){
+      alert(r.status === 423 ? 'Месяц закрыт — изменение заблокировано' : 'Не удалось — '+r.status);
+      if(btn){ btn.disabled = false; btn.textContent = 'Сохранить'; }
+      return;
+    }
+    setTimeout(()=>location.reload(), 150);
+  } catch(e){ alert('Ошибка: '+e.message); if(btn){ btn.disabled = false; btn.textContent = 'Сохранить'; } }
+}
+
 function row(it){
   const isNative = it.currency && it.currency.toLowerCase() !== 'rub';
   const sign = it.direction === 'income' ? '+' : '−';
@@ -138,6 +235,7 @@ function row(it){
     <td><div class="acts">
       <button class="btn btn-paid" onclick="act('${it.id}','paid')">✓ Оплачено</button>
       <button class="btn btn-gray" onclick="reschedule('${it.id}','${it.occurred_at}')">🗓 Перенести</button>
+      <button class="btn btn-edit" onclick="openEdit('${it.id}')">✎ Изменить</button>
       <button class="btn btn-gray" onclick="act('${it.id}','skip')">✕ Пропустить</button>
     </div></td>
   </tr>`;
@@ -183,10 +281,13 @@ function render(){
   const root = document.getElementById('root');
   if(!D){ root.innerHTML = '<div class="panel-empty">Нет household_id — данные не загружены.</div>'; return; }
 
+  [...D.overdue, ...D.upcoming].forEach(it => { BYID[it.id] = it; });
+
   if(activeTab === 'forecast'){
     root.innerHTML = forecastPanel();
     return;
   }
+
 
   const oc = D.overdue.length, uc = D.upcoming.length;
   const hero = `<div class="hero"><div class="hero-label">Планы к разбору</div>
@@ -202,6 +303,8 @@ function render(){
   }
 }
 render();
+document.getElementById('edit-overlay').addEventListener('click', e => { if(e.target.id === 'edit-overlay') closeEdit(); });
+document.addEventListener('keydown', e => { if(e.key === 'Escape') closeEdit(); });
 </script>
 </body>
 </html>

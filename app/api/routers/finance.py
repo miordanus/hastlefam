@@ -13,6 +13,7 @@ from app.api.schemas.finance import (
     BalanceSnapshotCreate,
     BudgetUpsert,
     BulkTagRequest,
+    RecurringCreate,
     SQLImportRequest,
     TransactionCorrectionUpdate,
     TransactionCreate,
@@ -77,6 +78,12 @@ def _run_accounts(db: Session, household_id: str) -> dict:
     if _use_rest():
         return FinanceService(None).list_accounts_with_balances_via_rest(household_id)
     return FinanceService(db).list_accounts_with_balances(household_id)
+
+
+def _run_recurring(db: Session, household_id: str) -> dict:
+    if _use_rest():
+        return FinanceService(None).list_recurring_via_rest(household_id)
+    return FinanceService(db).list_recurring(household_id)
 
 
 def _is_locked(db: Session, household_id: str, ym: str) -> bool:
@@ -374,6 +381,58 @@ def create_account(body: AccountCreate, db: Session = Depends(get_db)) -> dict:
     return {"ok": True, "id": str(acc.id)}
 
 
+@router.get("/recurring", response_class=HTMLResponse)
+def recurring_page(
+    request: Request,
+    household_id: str = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Recurring payments management — list, add, deactivate (mirrors bot /recurring)."""
+    hid = household_id or getattr(request.state, "household_id", None)
+    data = _run_recurring(db, hid) if hid else None
+    return templates.TemplateResponse(
+        request,
+        "recurring.html",
+        {"recurring_data": data, "household_id": hid},
+    )
+
+
+@router.get("/recurring/data")
+def recurring_data(household_id: str = Query(...), db: Session = Depends(get_db)) -> dict:
+    """JSON endpoint — active recurring payments."""
+    return _run_recurring(db, household_id)
+
+
+@router.post("/recurring")
+def create_recurring(body: RecurringCreate, db: Session = Depends(get_db)) -> dict:
+    """Create a monthly recurring payment from the web UI. Dual-path."""
+    if not (1 <= body.day_of_month <= 31):
+        raise HTTPException(status_code=422, detail="day_of_month must be 1–31")
+    if _use_rest():
+        rid = FinanceService(None).create_recurring_via_rest(
+            body.household_id, title=body.title, amount=body.amount,
+            currency=body.currency, day_of_month=body.day_of_month,
+        )
+    else:
+        rid = FinanceService(db).create_recurring(
+            body.household_id, title=body.title, amount=body.amount,
+            currency=body.currency, day_of_month=body.day_of_month,
+        )
+    return {"ok": True, "id": rid}
+
+
+@router.post("/recurring/{rec_id}/deactivate")
+def deactivate_recurring(rec_id: str, db: Session = Depends(get_db)) -> dict:
+    """Soft-delete a recurring payment (is_active=False). Dual-path."""
+    if _use_rest():
+        FinanceService(None).deactivate_recurring_via_rest(rec_id)
+        return {"ok": True, "id": rec_id}
+    ok = FinanceService(db).deactivate_recurring(rec_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="recurring payment not found")
+    return {"ok": True, "id": rec_id}
+
+
 @router.get("/months/lock/status")
 def month_lock_status(
     household_id: str = Query(...),
@@ -592,6 +651,9 @@ def edit_transaction(tx_id: str, body: TransactionUpdate, db: Session = Depends(
             patch["account_id"] = fields["account_id"]
         if fields.get("merchant") is not None:
             patch["merchant_raw"] = fields["merchant"]
+        if "applied_rate_override" in fields:  # explicit null clears it
+            v = fields["applied_rate_override"]
+            patch["applied_rate_override"] = float(v) if v is not None else None
         if not patch:
             return {"ok": True, "tx_id": tx_id, "unchanged": True}
         from app.infrastructure.supabase import SupabaseClient

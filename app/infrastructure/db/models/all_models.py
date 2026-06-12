@@ -216,6 +216,9 @@ class Transaction(Base):
     to_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     to_currency: Mapped[str | None] = mapped_column(String(10))
     exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    # Operator-set real RUB-per-unit rate for this txn; overrides CBR/applied-rate
+    # when valuing it to RUB (valuation_rate_to_rub). NULL → fall back to real/CBR.
+    applied_rate_override: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
