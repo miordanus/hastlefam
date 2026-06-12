@@ -2,7 +2,9 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from app.domain.enums import Currency, TransactionDirection
 
 
 class SQLImportRequest(BaseModel):
@@ -48,6 +50,38 @@ class TransactionCreate(BaseModel):
     merchant: str | None = None
     user_id: str | None = None
     is_planned: bool = False
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("amount must be greater than 0")
+        return v
+
+    @field_validator("direction")
+    @classmethod
+    def direction_valid(cls, v: str) -> str:
+        valid = [e.value for e in TransactionDirection]
+        if v not in valid:
+            raise ValueError(f"direction must be one of {valid}")
+        return v
+
+    @field_validator("currency")
+    @classmethod
+    def currency_valid(cls, v: str) -> str:
+        valid = [e.value for e in Currency]
+        match = next((x for x in valid if x.upper() == v.upper()), None)
+        if match is None:
+            raise ValueError(f"currency must be one of {valid}")
+        return match
+
+    @field_validator("merchant")
+    @classmethod
+    def merchant_strip(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped if stripped else None
 
 
 class TransactionUpdate(BaseModel):
