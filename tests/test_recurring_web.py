@@ -70,12 +70,20 @@ def test_recurring_via_rest_list(mock_supabase):
 def test_recurring_via_rest_create_posts(mock_supabase):
     FinanceService(None).create_recurring_via_rest(
         "h1", title="Аренда", amount=Decimal("50000"), currency="RUB", day_of_month=5)
-    assert mock_supabase.post_calls, "should POST to recurring_payments"
-    table, rows = mock_supabase.post_calls[-1]
-    assert table == "recurring_payments"
-    assert rows[0]["title"] == "Аренда"
-    assert rows[0]["is_active"] is True
-    assert rows[0]["cadence"] == "monthly"
+    tables_posted = [t for t, _ in mock_supabase.post_calls]
+    assert "recurring_payments" in tables_posted, "should POST to recurring_payments"
+    assert "transactions" in tables_posted, "should immediately POST a planned transaction"
+
+    _rp_table, rp_rows = next((t, r) for t, r in mock_supabase.post_calls if t == "recurring_payments")
+    assert rp_rows[0]["title"] == "Аренда"
+    assert rp_rows[0]["is_active"] is True
+    assert rp_rows[0]["cadence"] == "monthly"
+
+    _tx_table, tx_rows = next((t, r) for t, r in mock_supabase.post_calls if t == "transactions")
+    assert tx_rows[0]["is_planned"] is True
+    assert tx_rows[0]["merchant_raw"] == "Аренда"
+    assert tx_rows[0]["source"] == "recurring"
+    assert tx_rows[0]["direction"] == "expense"
 
 
 def test_recurring_via_rest_deactivate_patches(mock_supabase):

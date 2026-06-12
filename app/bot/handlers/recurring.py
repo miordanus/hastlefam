@@ -8,6 +8,7 @@ Subcommands:
 """
 from __future__ import annotations
 
+import calendar
 import re
 import uuid
 from datetime import date, datetime, timezone
@@ -17,8 +18,8 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.domain.enums import Currency
-from app.infrastructure.db.models import RecurringPayment, User
+from app.domain.enums import Currency, TransactionDirection
+from app.infrastructure.db.models import RecurringPayment, Transaction, User
 from app.infrastructure.db.session import SessionLocal
 
 router = Router()
@@ -158,13 +159,41 @@ async def _handle_add(message: Message, db, hid, args: str) -> None:
         is_active=True,
     )
     db.add(rp)
+
+    # Immediately create a planned transaction so it appears in /upcoming and /finance/planned
+    # without waiting for the nightly recurring-reminders job (3-day lookahead).
+    month_start = datetime(next_due.year, next_due.month, 1, tzinfo=timezone.utc)
+    last_d = calendar.monthrange(next_due.year, next_due.month)[1]
+    month_end = datetime(next_due.year, next_due.month, last_d, 23, 59, 59, tzinfo=timezone.utc)
+    existing_tx = db.query(Transaction).filter(
+        Transaction.household_id == hid,
+        Transaction.is_planned.is_(True),
+        Transaction.merchant_raw == title,
+        Transaction.occurred_at >= month_start,
+        Transaction.occurred_at <= month_end,
+    ).first()
+    if not existing_tx:
+        db.add(Transaction(
+            id=uuid.uuid4(),
+            household_id=hid,
+            direction=TransactionDirection.EXPENSE,
+            amount=amount,
+            currency=currency,
+            occurred_at=datetime(next_due.year, next_due.month, next_due.day, tzinfo=timezone.utc),
+            merchant_raw=title,
+            source="recurring",
+            parse_status="ok",
+            is_planned=True,
+            extra_tags=[],
+        ))
+
     db.commit()
 
     sym = _CUR_SYMBOL.get(currency_str, currency_str)
     await message.answer(
         f"✅ Добавил регулярный платёж.\n"
         f"{title} · {amount} {sym} · каждое {day_of_month}-е\n"
-        f"Следующий: {next_due.strftime('%d.%m.%Y')} — появится в /upcoming за 3 дня"
+        f"Следующий: {next_due.strftime('%d.%m.%Y')} — уже в /upcoming"
     )
 
 

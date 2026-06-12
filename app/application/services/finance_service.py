@@ -1310,13 +1310,43 @@ class FinanceService:
 
         hid = _uuid.UUID(household_id) if isinstance(household_id, str) else household_id
         cur = currency if isinstance(currency, Currency) else Currency(currency)
+        nd = next_recurring_occurrence(int(day_of_month))
         rec = RecurringPayment(
             id=_uuid.uuid4(), household_id=hid, title=title.strip(),
             amount_expected=Decimal(str(amount)), currency=cur, cadence="monthly",
-            day_of_month=int(day_of_month), next_due_date=next_recurring_occurrence(int(day_of_month)),
+            day_of_month=int(day_of_month), next_due_date=nd,
             is_active=True,
         )
         self.db.add(rec)
+
+        # Immediately create a planned transaction so it shows in /finance/planned
+        # without waiting for the nightly recurring-reminders job (3-day lookahead).
+        clean_title = title.strip()
+        month_start = datetime(nd.year, nd.month, 1, tzinfo=timezone.utc)
+        last_d = calendar.monthrange(nd.year, nd.month)[1]
+        month_end = datetime(nd.year, nd.month, last_d, 23, 59, 59, tzinfo=timezone.utc)
+        existing = self.db.query(Transaction).filter(
+            Transaction.household_id == hid,
+            Transaction.is_planned.is_(True),
+            Transaction.merchant_raw == clean_title,
+            Transaction.occurred_at >= month_start,
+            Transaction.occurred_at <= month_end,
+        ).first()
+        if not existing:
+            self.db.add(Transaction(
+                id=_uuid.uuid4(),
+                household_id=hid,
+                direction=TransactionDirection.EXPENSE,
+                amount=Decimal(str(amount)),
+                currency=cur,
+                occurred_at=datetime(nd.year, nd.month, nd.day, tzinfo=timezone.utc),
+                merchant_raw=clean_title,
+                source="recurring",
+                parse_status="ok",
+                is_planned=True,
+                extra_tags=[],
+            ))
+
         self.db.commit()
         return str(rec.id)
 
@@ -1365,15 +1395,46 @@ class FinanceService:
 
         settings = get_settings()
         rid = str(_uuid.uuid4())
+        nd = next_recurring_occurrence(int(day_of_month))
         body = {
             "id": rid, "household_id": household_id, "title": title.strip(),
             "amount_expected": float(amount), "currency": Currency(currency).value,
             "cadence": "monthly", "day_of_month": int(day_of_month),
-            "next_due_date": next_recurring_occurrence(int(day_of_month)).isoformat(),
+            "next_due_date": nd.isoformat(),
             "is_active": True,
         }
+        clean_title = title.strip()
+        last_d = calendar.monthrange(nd.year, nd.month)[1]
+        month_start = f"{nd.year}-{nd.month:02d}-01T00:00:00+00:00"
+        month_end = f"{nd.year}-{nd.month:02d}-{last_d:02d}T23:59:59+00:00"
         with SupabaseClient(settings.supabase_url, settings.supabase_service_role_key) as sb:
             sb.post("recurring_payments", [body])
+            # Immediately create a planned transaction so it shows in /finance/planned
+            # without waiting for the nightly recurring-reminders job (3-day lookahead).
+            existing = sb.get("transactions", {
+                "select": "id",
+                "household_id": f"eq.{household_id}",
+                "is_planned": "eq.true",
+                "merchant_raw": f"eq.{clean_title}",
+                "occurred_at": [f"gte.{month_start}", f"lte.{month_end}"],
+                "limit": "1",
+            })
+            if not existing:
+                sb.post("transactions", [{
+                    "id": str(_uuid.uuid4()),
+                    "household_id": household_id,
+                    "direction": "expense",
+                    "amount": float(amount),
+                    "currency": Currency(currency).value,
+                    "occurred_at": f"{nd.year}-{nd.month:02d}-{nd.day:02d}T00:00:00+00:00",
+                    "merchant_raw": clean_title,
+                    "source": "recurring",
+                    "parse_status": "ok",
+                    "is_planned": True,
+                    "is_skipped": False,
+                    "is_internal_transfer": False,
+                    "extra_tags": [],
+                }])
         return rid
 
     def deactivate_recurring_via_rest(self, rec_id: str) -> bool:
