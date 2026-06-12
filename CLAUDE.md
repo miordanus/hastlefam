@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Telegram-first money copilot for a two-person household. FastAPI backend + aiogram 3 Telegram bot, deployed on Railway (two separate services), database on Supabase (PostgreSQL, schema `hastlefam`). A Vercel adapter (`api/index.py` → `app.main:app`) is also configured for the web service.
+Telegram-first money copilot for a two-person household. FastAPI backend + aiogram 3 Telegram bot. Web service deployed on **Vercel** (`api/index.py` → `app.main:app`); bot worker deployed on **Railway** (`railway.json` sets `startCommand: python -m app.bot.main`). Database on Supabase (PostgreSQL, schema `hastlefam`).
 
 Python 3.11 only (`runtime.txt`).
 
@@ -99,7 +99,7 @@ Two ways to log in:
 `GET /` redirects to `/finance/health?household_id=<hid>` (the data-health home page) if the cookie is valid, otherwise renders `login.html`. Both login paths land on `/finance/health`. `POST /auth/logout` clears the cookie. `DASHBOARD_PASSWORD` is no longer used.
 
 **Worker** (`app/bot/main.py`) — aiogram 3 polling bot + APScheduler (daily status digest at 10:00 MSK, recurring payment reminders). No HTTP port. Fetches FX rates on startup.  
-Railway `Procfile` maps `web:` → uvicorn, `worker:` → bot. `railway.json` has no `startCommand` and no healthcheck entry. `vercel.json` routes everything to `api/index.py` which re-exports the FastAPI app — deploy the web service to either platform.
+`railway.json` sets `startCommand: python -m app.bot.main` so Railway only runs the bot worker (ignoring the `web:` Procfile entry). `vercel.json` routes everything to `api/index.py` which re-exports the FastAPI app — web lives on Vercel only.
 
 ### Vercel REST fallback (web service)
 
