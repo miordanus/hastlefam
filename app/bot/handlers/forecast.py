@@ -44,15 +44,18 @@ async def forecast_command(message: Message) -> None:
         await message.answer("🗓 Нет запланированных платежей в ближайшие 6 недель.")
         return
 
-    lines: list[str] = ["📆 *Прогноз на 6 недель*\n"]
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    lines: list[str] = ["📆 <b>Прогноз на 6 недель</b>\n"]
 
     if overdue:
-        lines.append("⚠️ *Просроченные*")
+        lines.append("⚠️ <b>Просроченные</b>")
         for item in overdue:
             icon = "💰" if item.get("direction") == "income" else "💸"
-            tag = f" #{item['primary_tag']}" if item.get("primary_tag") else ""
+            tag = f" #{_esc(item['primary_tag'])}" if item.get("primary_tag") else ""
             cur = item.get("currency", "RUB")
-            title = item.get("merchant_raw") or item.get("title", "?")
+            title = _esc(item.get("merchant_raw") or item.get("title", "?"))
             lines.append(f"  {icon} {_fmt(item['amount'])} {cur} · {title}{tag}")
         lines.append("")
 
@@ -64,12 +67,12 @@ async def forecast_command(message: Message) -> None:
         if inc:
             totals_parts.append(f" +{_fmt(inc)} ₽")
         totals = "".join(totals_parts)
-        lines.append(f"📅 *{week['week_label']}*{totals}")
+        lines.append(f"📅 <b>{_esc(week['week_label'])}</b>{totals}")
         for item in week["items"]:
             icon = "💰" if item.get("direction") == "income" else "💸"
-            tag = f" #{item['primary_tag']}" if item.get("primary_tag") else ""
+            tag = f" #{_esc(item['primary_tag'])}" if item.get("primary_tag") else ""
             cur = item.get("currency", "RUB")
-            lines.append(f"  {icon} {_fmt(item['amount'])} {cur} · {item.get('title', '?')}{tag}")
+            lines.append(f"  {icon} {_fmt(item['amount'])} {cur} · {_esc(item.get('title', '?'))}{tag}")
         lines.append("")
 
-    await message.answer("\n".join(lines).rstrip(), parse_mode="Markdown")
+    await message.answer("\n".join(lines).rstrip(), parse_mode="HTML")
